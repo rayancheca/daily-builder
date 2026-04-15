@@ -631,6 +631,34 @@ main {
   background: oklch(82% 0.16 70 / 0.12);
   border: 1px solid oklch(82% 0.16 70 / 0.25);
 }
+.pc-status.in-progress.live {
+  color: var(--green);
+  background: oklch(76% 0.18 150 / 0.14);
+  border: 1px solid oklch(76% 0.18 150 / 0.35);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.pc-status-dot {
+  width: 5px; height: 5px;
+  background: var(--green);
+  border-radius: 50%;
+  box-shadow: 0 0 6px var(--green);
+  animation: pulse-glow 1.5s infinite;
+}
+.project-card.live {
+  background: linear-gradient(135deg, oklch(13% 0.04 150), var(--bg1));
+  border-color: oklch(76% 0.18 150 / 0.40);
+}
+.project-card.live::after {
+  background: linear-gradient(90deg, var(--green), var(--cyan));
+  opacity: 1;
+  height: 2px;
+}
+.project-card.live::before {
+  background: var(--green);
+  box-shadow: 0 0 12px var(--green);
+}
 .pc-tagline {
   color: var(--text2);
   font-size: 12px;

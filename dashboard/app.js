@@ -156,13 +156,20 @@ function renderHero(d) {
   if (active) {
     const total = active.completed.length + active.next_steps.length;
     const pct = total > 0 ? Math.round(100 * active.completed.length / total) : 0;
+    const live = active.live_signal === 'recent_git';
+    const eyebrow = live
+      ? `Live Activity · last touched ${fmt.ago(active.last_activity)}`
+      : `Now Building · Session ${active.session}`;
+    const sub = live
+      ? `${escapeHtml(active.in_progress || 'Polishing')} · ${active.commit_count} commits so far`
+      : escapeHtml(active.in_progress || 'Setting up project structure');
     heroEl.innerHTML = `
-      <div class="hero-eyebrow">Now Building · Session ${active.session}</div>
+      <div class="hero-eyebrow">${escapeHtml(eyebrow)}</div>
       <div class="hero-headline">${escapeHtml(active.name)}</div>
-      <div class="hero-sub">${escapeHtml(active.in_progress || 'Setting up project structure')}</div>
+      <div class="hero-sub">${sub}</div>
       <div class="hero-progress">
         <div class="hero-progress-label">
-          <span>Progress</span>
+          <span>${live ? 'Build progress' : 'Progress'}</span>
           <span>${active.completed.length} / ${total} steps · ${pct}%</span>
         </div>
         <div class="hero-progress-bar">
@@ -397,17 +404,23 @@ function renderProjects(d) {
     return;
   }
   wrap.innerHTML = projects.map(p => {
-    const isActive = p.status !== 'COMPLETE';
+    const live = p.live_signal === 'recent_git';
+    const building = p.status !== 'COMPLETE';
+    const isActive = building || live;
     const total = p.completed.length + p.next_steps.length;
     const pct = total > 0 ? Math.round(100 * p.completed.length / total) : 0;
     const tagline = p.description || p.in_progress || '—';
     const ago = p.last_commit ? fmt.ago(p.last_commit) : '—';
+    let pill, pillClass;
+    if (live) { pill = 'ACTIVE'; pillClass = 'in-progress live'; }
+    else if (building) { pill = 'BUILDING'; pillClass = 'in-progress'; }
+    else { pill = 'SHIPPED'; pillClass = 'complete'; }
     return `
-      <div class="project-card ${isActive ? 'active' : ''}" data-name="${escapeAttr(p.name)}">
+      <div class="project-card ${isActive ? 'active' : ''} ${live ? 'live' : ''}" data-name="${escapeAttr(p.name)}">
         ${p.github ? `<a class="pc-gh" href="${p.github}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open on GitHub">↗</a>` : ''}
         <div class="pc-header">
           <div class="pc-name">${escapeHtml(p.name)}</div>
-          <div class="pc-status ${isActive ? 'in-progress' : 'complete'}">${isActive ? 'BUILDING' : 'SHIPPED'}</div>
+          <div class="pc-status ${pillClass}">${live ? '<span class="pc-status-dot"></span>' : ''}${pill}</div>
         </div>
         <div class="pc-tagline">${escapeHtml(tagline)}</div>
         <div class="pc-progress"><div class="pc-progress-fill" style="width:${pct}%"></div></div>

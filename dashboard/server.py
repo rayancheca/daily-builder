@@ -379,6 +379,68 @@ def all_projects():
     return out
 
 
+ACTIVE_WINDOW_SECONDS = 30 * 60  # treat recent git activity within 30 min as "live"
+
+
+def _latest_git_activity(project_dir):
+    """Return the most recent mtime across HEAD, refs, and .git itself."""
+    latest = 0
+    for sub in ('.git', '.git/HEAD', '.git/index', '.git/COMMIT_EDITMSG'):
+        try:
+            latest = max(latest, os.path.getmtime(os.path.join(project_dir, sub)))
+        except OSError:
+            pass
+    refs_dir = os.path.join(project_dir, '.git', 'refs', 'heads')
+    if os.path.isdir(refs_dir):
+        try:
+            for fname in os.listdir(refs_dir):
+                p = os.path.join(refs_dir, fname)
+                try:
+                    latest = max(latest, os.path.getmtime(p))
+                except OSError:
+                    pass
+        except OSError:
+            pass
+    # Also check working-tree state.md mtime
+    state_md = os.path.join(project_dir, 'state.md')
+    try:
+        latest = max(latest, os.path.getmtime(state_md))
+    except OSError:
+        pass
+    return latest
+
+
+def detect_active(projects):
+    """Pick the live project. Trust state.md when it says IN PROGRESS,
+    otherwise fall back to the most recent git activity within the
+    active window — Claude often marks state.md COMPLETE prematurely
+    while still committing polish work.
+    """
+    declared = next((p for p in projects if p['status'] != 'COMPLETE'), None)
+    if declared:
+        return declared
+    now = time.time()
+    candidates = []
+    for p in projects:
+        proj_dir = os.path.join(PROJECTS_DIR, p['name'])
+        latest = _latest_git_activity(proj_dir)
+        if latest and now - latest < ACTIVE_WINDOW_SECONDS:
+            candidates.append((latest, p))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: -x[0])
+    latest_ts, p = candidates[0]
+    p = dict(p)
+    p['status'] = 'ACTIVE'
+    p['live_signal'] = 'recent_git'
+    p['last_activity'] = latest_ts
+    if not p.get('in_progress'):
+        log = _git_log_full(os.path.join(PROJECTS_DIR, p['name']), limit=1)
+        if log:
+            p['in_progress'] = f"latest: {log[0]['subject']}"
+    return p
+
+
 def streak_calendar(projects, days=365):
     today = datetime.now().date()
     start = today - timedelta(days=days - 1)
@@ -533,7 +595,13 @@ def get_overview():
                 p['github'] = h['github']
             if h.get('status') == 'COMPLETE':
                 p['status'] = 'COMPLETE'
-    active = next((p for p in projects if p['status'] != 'COMPLETE'), None)
+    active = detect_active(projects)
+    if active and active.get('live_signal'):
+        for p in projects:
+            if p['name'] == active['name']:
+                p['live_signal'] = active['live_signal']
+                p['last_activity'] = active.get('last_activity')
+                break
     cal = streak_calendar(projects, days=365)
     velocity = commit_velocity(projects, days=30)
     today_count = velocity[-1]['count'] if velocity else 0
@@ -597,7 +665,16 @@ def _watched_paths():
             paths.append(os.path.join(d, 'state.md'))
             paths.append(os.path.join(d, '.git'))
             paths.append(os.path.join(d, '.git', 'HEAD'))
-            paths.append(os.path.join(d, '.git', 'refs', 'heads'))
+            paths.append(os.path.join(d, '.git', 'index'))
+            paths.append(os.path.join(d, '.git', 'COMMIT_EDITMSG'))
+            refs_dir = os.path.join(d, '.git', 'refs', 'heads')
+            paths.append(refs_dir)
+            if os.path.isdir(refs_dir):
+                try:
+                    for fname in os.listdir(refs_dir):
+                        paths.append(os.path.join(refs_dir, fname))
+                except OSError:
+                    pass
     return paths
 
 
