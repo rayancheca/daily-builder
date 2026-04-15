@@ -1,0 +1,1048 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Daily Builder</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #070b12;
+    --bg1: #0b1019;
+    --bg2: #0f1624;
+    --bg3: #141d2e;
+    --bg4: #1a2540;
+    --border: #1c2a3e;
+    --border2: #243352;
+    --blue: #3b82f6;
+    --blue2: #60a5fa;
+    --cyan: #06b6d4;
+    --green: #10b981;
+    --green2: #34d399;
+    --amber: #f59e0b;
+    --red: #ef4444;
+    --purple: #8b5cf6;
+    --pink: #ec4899;
+    --text: #e2e8f0;
+    --text2: #94a3b8;
+    --text3: #475569;
+    --text4: #2d3f57;
+    --font-mono: 'SF Mono', 'Fira Code', monospace;
+    --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --radius: 10px;
+  }
+
+  body {
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── Nav ── */
+  nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    height: 50px;
+    background: var(--bg1);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    backdrop-filter: blur(12px);
+  }
+
+  .logo {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    color: var(--blue);
+  }
+
+  .logo span { color: var(--cyan); }
+
+  .nav-right { display: flex; align-items: center; gap: 16px; }
+
+  .live-badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    background: rgba(16,185,129,.1);
+    border: 1px solid rgba(16,185,129,.2);
+    font-size: 10px;
+    font-family: var(--font-mono);
+    letter-spacing: 1px;
+    color: var(--green);
+  }
+
+  .live-badge.offline {
+    background: rgba(239,68,68,.1);
+    border-color: rgba(239,68,68,.2);
+    color: var(--red);
+  }
+
+  .live-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--green);
+    animation: blink 2s infinite;
+  }
+
+  .live-badge.offline .live-dot { background: var(--red); animation: none; }
+
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.2} }
+
+  .nav-time { font-family: var(--font-mono); font-size: 11px; color: var(--text3); }
+
+  .refresh-btn {
+    background: none;
+    border: 1px solid var(--border2);
+    color: var(--text3);
+    padding: 5px 12px;
+    border-radius: 6px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    cursor: pointer;
+    letter-spacing: 1px;
+    transition: all .15s;
+  }
+
+  .refresh-btn:hover { border-color: var(--blue); color: var(--blue); }
+
+  /* ── Stat bar ── */
+  .stat-bar {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .stat {
+    padding: 14px 20px;
+    border-right: 1px solid var(--border);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .stat:last-child { border-right: none; }
+
+  .stat-label {
+    font-size: 9px;
+    letter-spacing: 1.5px;
+    color: var(--text3);
+    text-transform: uppercase;
+    margin-bottom: 6px;
+    font-family: var(--font-mono);
+  }
+
+  .stat-value {
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1;
+    font-family: var(--font-mono);
+  }
+
+  .stat-sub { font-size: 10px; color: var(--text3); margin-top: 4px; }
+
+  .c-blue { color: var(--blue); }
+  .c-green { color: var(--green); }
+  .c-amber { color: var(--amber); }
+  .c-cyan { color: var(--cyan); }
+  .c-purple { color: var(--purple); }
+  .c-pink { color: var(--pink); }
+
+  /* ── Streak banner ── */
+  .streak-bar {
+    padding: 10px 24px;
+    background: linear-gradient(90deg, rgba(245,158,11,.08) 0%, transparent 60%);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 12px;
+    color: var(--text2);
+  }
+
+  .streak-fire { font-size: 18px; }
+  .streak-count { font-family: var(--font-mono); font-size: 20px; font-weight: 700; color: var(--amber); }
+  .streak-label { color: var(--text3); font-size: 11px; }
+
+  /* ── Layout ── */
+  .layout {
+    display: grid;
+    grid-template-columns: 1fr 1fr 320px;
+    gap: 0;
+    min-height: calc(100vh - 50px - 57px - 41px);
+  }
+
+  .col {
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    border-right: 1px solid var(--border);
+  }
+
+  .col:last-child { border-right: none; padding: 0; }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--bg1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+
+  .card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg2);
+  }
+
+  .card-title {
+    font-size: 9px;
+    letter-spacing: 2px;
+    color: var(--text3);
+    text-transform: uppercase;
+    font-family: var(--font-mono);
+  }
+
+  .card-badge {
+    font-size: 10px;
+    color: var(--text3);
+    font-family: var(--font-mono);
+  }
+
+  .card-body { padding: 16px; }
+
+  /* ── Active project ── */
+  .proj-name {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--blue2);
+    margin-bottom: 4px;
+    font-family: var(--font-mono);
+  }
+
+  .proj-tagline {
+    font-size: 12px;
+    color: var(--text2);
+    line-height: 1.5;
+    margin-bottom: 14px;
+  }
+
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    font-family: var(--font-mono);
+    margin-bottom: 14px;
+  }
+
+  .sb-progress { background: rgba(16,185,129,.1); color: var(--green); border: 1px solid rgba(16,185,129,.25); }
+  .sb-complete { background: rgba(59,130,246,.1); color: var(--blue); border: 1px solid rgba(59,130,246,.25); }
+  .sb-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; animation: blink 1.5s infinite; }
+
+  .progress-wrap { margin-bottom: 14px; }
+  .progress-label { display: flex; justify-content: space-between; font-size: 10px; color: var(--text3); margin-bottom: 6px; font-family: var(--font-mono); }
+  .progress-bar { height: 4px; background: var(--bg4); border-radius: 2px; overflow: hidden; }
+  .progress-fill { height: 100%; background: linear-gradient(90deg, var(--blue), var(--cyan)); border-radius: 2px; transition: width .5s ease; }
+
+  .meta-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+
+  .meta-box {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 8px 12px;
+  }
+
+  .meta-key { font-size: 9px; color: var(--text3); letter-spacing: 1px; text-transform: uppercase; font-family: var(--font-mono); margin-bottom: 3px; }
+  .meta-val { font-size: 13px; color: var(--text2); font-family: var(--font-mono); }
+
+  .steps-section { margin-top: 4px; }
+  .steps-label { font-size: 9px; color: var(--text3); letter-spacing: 1.5px; text-transform: uppercase; font-family: var(--font-mono); margin-bottom: 8px; }
+
+  .step-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    color: var(--text2);
+    line-height: 1.4;
+    margin-bottom: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg2);
+  }
+
+  .step-icon { flex-shrink: 0; font-size: 11px; margin-top: 1px; }
+
+  /* ── Heatmap ── */
+  .heatmap-grid {
+    display: flex;
+    gap: 3px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+
+  .heatmap-col { display: flex; flex-direction: column; gap: 3px; }
+
+  .heatmap-cell {
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    background: var(--bg4);
+    cursor: pointer;
+    transition: transform .1s;
+    position: relative;
+  }
+
+  .heatmap-cell:hover { transform: scale(1.3); }
+  .heatmap-cell.level-1 { background: rgba(16,185,129,.25); }
+  .heatmap-cell.level-2 { background: rgba(16,185,129,.55); }
+  .heatmap-cell.level-3 { background: rgba(16,185,129,.85); }
+  .heatmap-cell.today { box-shadow: 0 0 0 1px var(--cyan); }
+
+  .heatmap-months {
+    display: flex;
+    gap: 3px;
+    margin-bottom: 4px;
+    padding-left: 0;
+  }
+
+  .heatmap-month { font-size: 9px; color: var(--text3); font-family: var(--font-mono); }
+
+  .heatmap-legend {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 8px;
+    font-size: 9px;
+    color: var(--text3);
+    font-family: var(--font-mono);
+  }
+
+  .legend-cell { width: 10px; height: 10px; border-radius: 2px; }
+
+  /* ── Domain bars ── */
+  .domain-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  .domain-name { font-size: 11px; color: var(--text2); width: 180px; flex-shrink: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .domain-bar-wrap { flex: 1; height: 6px; background: var(--bg4); border-radius: 3px; overflow: hidden; }
+  .domain-bar-fill { height: 100%; border-radius: 3px; transition: width .6s ease; }
+  .domain-count { font-size: 11px; color: var(--text3); font-family: var(--font-mono); width: 20px; text-align: right; flex-shrink: 0; }
+
+  /* ── Stack tags ── */
+  .stack-cloud { display: flex; flex-wrap: wrap; gap: 6px; }
+
+  .stack-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+    color: var(--text2);
+    font-family: var(--font-mono);
+  }
+
+  .stack-chip-count {
+    font-size: 9px;
+    background: var(--bg4);
+    color: var(--text3);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+
+  /* ── History table ── */
+  .table-wrap { overflow-x: auto; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+
+  thead th {
+    text-align: left;
+    font-size: 9px;
+    letter-spacing: 1.5px;
+    color: var(--text3);
+    text-transform: uppercase;
+    padding: 10px 14px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    font-family: var(--font-mono);
+    white-space: nowrap;
+  }
+
+  tbody tr { border-bottom: 1px solid var(--border); transition: background .1s; cursor: pointer; }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: var(--bg2); }
+
+  tbody td { padding: 11px 14px; color: var(--text2); vertical-align: middle; }
+
+  .td-name { color: var(--blue2); font-weight: 600; font-family: var(--font-mono); }
+  .td-name a { color: inherit; text-decoration: none; }
+  .td-name a:hover { text-decoration: underline; }
+
+  .domain-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 5px;
+    font-size: 9px;
+    background: rgba(139,92,246,.1);
+    color: var(--purple);
+    border: 1px solid rgba(139,92,246,.2);
+    white-space: nowrap;
+    font-family: var(--font-mono);
+  }
+
+  .status-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 20px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    font-family: var(--font-mono);
+  }
+
+  .sp-complete { background: rgba(16,185,129,.1); color: var(--green); border: 1px solid rgba(16,185,129,.2); }
+  .sp-progress { background: rgba(245,158,11,.1); color: var(--amber); border: 1px solid rgba(245,158,11,.2); }
+
+  .mini-tags { display: flex; gap: 3px; flex-wrap: wrap; }
+  .mini-tag { padding: 1px 6px; border-radius: 4px; font-size: 9px; background: var(--bg3); color: var(--text3); border: 1px solid var(--border2); font-family: var(--font-mono); }
+
+  /* ── Right panel ── */
+  .right-col { display: flex; flex-direction: column; height: calc(100vh - 50px - 57px - 41px); overflow: hidden; }
+
+  .panel-section { display: flex; flex-direction: column; flex: 1; overflow: hidden; border-bottom: 1px solid var(--border); }
+  .panel-section:last-child { border-bottom: none; }
+
+  .panel-head {
+    padding: 12px 16px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    font-size: 9px;
+    letter-spacing: 2px;
+    color: var(--text3);
+    text-transform: uppercase;
+    font-family: var(--font-mono);
+    flex-shrink: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .log-scroll { flex: 1; overflow-y: auto; padding: 8px; }
+
+  .log-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 7px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    margin-bottom: 2px;
+    transition: background .1s;
+  }
+
+  .log-item:hover { background: var(--bg2); }
+
+  .log-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; margin-top: 3px; }
+  .ld-start { background: var(--blue); }
+  .ld-new { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .ld-resume { background: var(--cyan); }
+  .ld-end { background: var(--text3); }
+  .ld-error { background: var(--red); box-shadow: 0 0 6px var(--red); }
+
+  .log-time { font-family: var(--font-mono); font-size: 10px; color: var(--text3); flex-shrink: 0; white-space: nowrap; }
+  .log-msg { color: var(--text2); font-size: 11px; line-height: 1.4; }
+
+  /* ── Session stats ── */
+  .session-stats { padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+
+  .session-stat-row { display: flex; justify-content: space-between; align-items: center; font-size: 11px; }
+  .session-stat-label { color: var(--text3); font-family: var(--font-mono); font-size: 10px; }
+  .session-stat-val { color: var(--text2); font-family: var(--font-mono); font-size: 12px; font-weight: 600; }
+
+  /* ── Empty ── */
+  .empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 16px;
+    color: var(--text3);
+    text-align: center;
+    gap: 8px;
+  }
+
+  .empty-icon { font-size: 24px; opacity: .3; }
+  .empty-title { font-size: 13px; color: var(--text2); }
+  .empty-sub { font-size: 11px; line-height: 1.5; }
+
+  /* scrollbar */
+  ::-webkit-scrollbar { width: 3px; height: 3px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+  /* tooltip */
+  .tooltip {
+    position: fixed;
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 10px;
+    color: var(--text);
+    font-family: var(--font-mono);
+    pointer-events: none;
+    z-index: 999;
+    white-space: nowrap;
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+<div class="tooltip" id="tooltip"></div>
+
+<nav>
+  <div class="logo">DAILY<span>.</span>BUILDER</div>
+  <div class="nav-right">
+    <div class="live-badge" id="live-badge">
+      <div class="live-dot"></div>
+      <span id="live-text">LIVE</span>
+    </div>
+    <span class="nav-time" id="nav-time"></span>
+    <button class="refresh-btn" onclick="reconnect()">↻ REFRESH</button>
+  </div>
+</nav>
+
+<div class="stat-bar">
+  <div class="stat"><div class="stat-label">Total Projects</div><div class="stat-value c-blue" id="s-total">0</div></div>
+  <div class="stat"><div class="stat-label">Completed</div><div class="stat-value c-green" id="s-done">0</div></div>
+  <div class="stat"><div class="stat-label">In Progress</div><div class="stat-value c-amber" id="s-wip">0</div></div>
+  <div class="stat"><div class="stat-label">Success Rate</div><div class="stat-value c-cyan" id="s-rate">—</div><div class="stat-sub" id="s-rate-sub"></div></div>
+  <div class="stat"><div class="stat-label">Sessions Run</div><div class="stat-value c-purple" id="s-sessions">0</div></div>
+  <div class="stat"><div class="stat-label">Active Now</div><div class="stat-value" id="s-active">NO</div><div class="stat-sub" id="s-active-sub"></div></div>
+</div>
+
+<div class="streak-bar" id="streak-bar">
+  <span class="streak-fire">🔥</span>
+  <span class="streak-count" id="streak-num">0</span>
+  <span>day streak</span>
+  <span class="streak-label" id="streak-msg">— start building to begin your streak</span>
+</div>
+
+<div class="layout">
+
+  <!-- Col 1: Active + Heatmap + Domains -->
+  <div class="col">
+
+    <div class="card" id="active-card">
+      <div class="card-head">
+        <span class="card-title">Active Project</span>
+        <span id="active-gh"></span>
+      </div>
+      <div class="card-body" id="active-body">
+        <div class="empty">
+          <div class="empty-icon">◻</div>
+          <div class="empty-title">No active project</div>
+          <div class="empty-sub">Run start.sh to begin</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Build Activity</span>
+        <span class="card-badge">Last 12 weeks</span>
+      </div>
+      <div class="card-body">
+        <div class="heatmap-months" id="heatmap-months"></div>
+        <div class="heatmap-grid" id="heatmap-grid"></div>
+        <div class="heatmap-legend">
+          <span>Less</span>
+          <div class="legend-cell" style="background:var(--bg4)"></div>
+          <div class="legend-cell" style="background:rgba(16,185,129,.25)"></div>
+          <div class="legend-cell" style="background:rgba(16,185,129,.55)"></div>
+          <div class="legend-cell" style="background:rgba(16,185,129,.85)"></div>
+          <span>More</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Domain Breakdown</span>
+        <span class="card-badge" id="domain-total"></span>
+      </div>
+      <div class="card-body" id="domain-body">
+        <div class="empty">
+          <div class="empty-icon">◻</div>
+          <div class="empty-title">No data yet</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Col 2: History + Stack -->
+  <div class="col">
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Project History</span>
+        <span class="card-badge" id="history-count">0 projects</span>
+      </div>
+      <div class="table-wrap" id="history-body">
+        <div class="empty">
+          <div class="empty-icon">◻</div>
+          <div class="empty-title">No projects yet</div>
+          <div class="empty-sub">History appears after first build</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Tech Stack Frequency</span>
+        <span class="card-badge" id="stack-total"></span>
+      </div>
+      <div class="card-body" id="stack-body">
+        <div class="empty">
+          <div class="empty-icon">◻</div>
+          <div class="empty-title">No data yet</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Col 3: Log + Session stats -->
+  <div class="col right-col">
+
+    <div class="panel-section" style="flex:2">
+      <div class="panel-head">
+        <span>Session Log</span>
+        <span id="log-count" style="color:var(--text3);font-size:10px"></span>
+      </div>
+      <div class="log-scroll" id="log-list">
+        <div class="empty"><div class="empty-sub">No sessions yet</div></div>
+      </div>
+    </div>
+
+    <div class="panel-section" style="flex:1">
+      <div class="panel-head">Session Stats</div>
+      <div class="session-stats" id="session-stats">
+        <div class="session-stat-row">
+          <span class="session-stat-label">Total sessions</span>
+          <span class="session-stat-val" id="ss-total">—</span>
+        </div>
+        <div class="session-stat-row">
+          <span class="session-stat-label">Successful builds</span>
+          <span class="session-stat-val" id="ss-builds">—</span>
+        </div>
+        <div class="session-stat-row">
+          <span class="session-stat-label">Errors encountered</span>
+          <span class="session-stat-val" id="ss-errors" style="color:var(--red)">—</span>
+        </div>
+        <div class="session-stat-row">
+          <span class="session-stat-label">Last active</span>
+          <span class="session-stat-val" id="ss-last">—</span>
+        </div>
+        <div class="session-stat-row">
+          <span class="session-stat-label">First session</span>
+          <span class="session-stat-val" id="ss-first">—</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const DOMAIN_COLORS = [
+  'rgba(59,130,246,.7)', 'rgba(16,185,129,.7)', 'rgba(139,92,246,.7)',
+  'rgba(245,158,11,.7)', 'rgba(6,182,212,.7)', 'rgba(236,72,153,.7)'
+];
+
+let tooltip = document.getElementById('tooltip');
+
+function showTooltip(e, text) {
+  tooltip.textContent = text;
+  tooltip.style.display = 'block';
+  tooltip.style.left = (e.clientX + 12) + 'px';
+  tooltip.style.top = (e.clientY - 28) + 'px';
+}
+
+function hideTooltip() { tooltip.style.display = 'none'; }
+
+function timeAgo(str) {
+  if (!str) return '—';
+  const d = new Date(str.replace(' ', 'T'));
+  const s = Math.floor((Date.now() - d) / 1000);
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  if (s < 86400) return Math.floor(s/3600) + 'h ago';
+  return Math.floor(s/86400) + 'd ago';
+}
+
+function calcStreak(history) {
+  if (!history.length) return 0;
+  const dates = [...new Set(history.map(p => p.date))].sort().reverse();
+  const today = new Date().toISOString().slice(0,10);
+  let streak = 0;
+  let check = today;
+  for (const d of dates) {
+    if (d === check) {
+      streak++;
+      const dt = new Date(check);
+      dt.setDate(dt.getDate() - 1);
+      check = dt.toISOString().slice(0,10);
+    } else break;
+  }
+  return streak;
+}
+
+function buildHeatmap(history) {
+  const grid = document.getElementById('heatmap-grid');
+  const monthsEl = document.getElementById('heatmap-months');
+  grid.innerHTML = '';
+  monthsEl.innerHTML = '';
+
+  const dateMap = {};
+  history.forEach(p => {
+    dateMap[p.date] = (dateMap[p.date] || 0) + 1;
+  });
+
+  const today = new Date();
+  const weeks = 12;
+  const days = weeks * 7;
+  const start = new Date(today);
+  start.setDate(start.getDate() - days + 1);
+
+  // align to Sunday
+  const startDay = start.getDay();
+  start.setDate(start.getDate() - startDay);
+
+  const cols = [];
+  let cur = new Date(start);
+  let lastMonth = -1;
+  const monthPositions = [];
+
+  while (cur <= today) {
+    const col = [];
+    for (let d = 0; d < 7; d++) {
+      col.push(new Date(cur));
+      cur.setDate(cur.getDate() + 1);
+    }
+    const month = col[0].getMonth();
+    if (month !== lastMonth) {
+      monthPositions.push({ col: cols.length, month });
+      lastMonth = month;
+    }
+    cols.push(col);
+  }
+
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const monthsRow = document.createElement('div');
+  monthsRow.style.cssText = 'display:flex;gap:3px;margin-bottom:4px;';
+  cols.forEach((col, i) => {
+    const mp = monthPositions.find(m => m.col === i);
+    const span = document.createElement('span');
+    span.style.cssText = `width:12px;font-size:9px;color:var(--text4);font-family:var(--font-mono);flex-shrink:0;`;
+    if (mp) span.textContent = MONTHS[mp.month].slice(0,1);
+    monthsRow.appendChild(span);
+  });
+  monthsEl.appendChild(monthsRow);
+
+  cols.forEach(col => {
+    const colEl = document.createElement('div');
+    colEl.className = 'heatmap-col';
+    col.forEach(date => {
+      const dateStr = date.toISOString().slice(0,10);
+      const count = dateMap[dateStr] || 0;
+      const cell = document.createElement('div');
+      cell.className = 'heatmap-cell';
+      if (count >= 3) cell.classList.add('level-3');
+      else if (count === 2) cell.classList.add('level-2');
+      else if (count === 1) cell.classList.add('level-1');
+      if (dateStr === today.toISOString().slice(0,10)) cell.classList.add('today');
+      if (date > today) cell.style.opacity = '0';
+      cell.addEventListener('mouseenter', e => showTooltip(e, `${dateStr} — ${count} project${count!==1?'s':''}`));
+      cell.addEventListener('mouseleave', hideTooltip);
+      colEl.appendChild(cell);
+    });
+    grid.appendChild(colEl);
+  });
+}
+
+function buildDomains(history) {
+  const body = document.getElementById('domain-body');
+  const totalEl = document.getElementById('domain-total');
+  if (!history.length) {
+    body.innerHTML = '<div class="empty"><div class="empty-icon">◻</div><div class="empty-title">No data yet</div></div>';
+    totalEl.textContent = '';
+    return;
+  }
+  const counts = {};
+  history.forEach(p => {
+    const d = p.domain || 'Unknown';
+    counts[d] = (counts[d] || 0) + 1;
+  });
+  const sorted = Object.entries(counts).sort((a,b) => b[1]-a[1]);
+  const max = sorted[0][1];
+  totalEl.textContent = sorted.length + ' domains';
+  body.innerHTML = sorted.map(([name, count], i) => `
+    <div class="domain-row">
+      <div class="domain-name" title="${name}">${name}</div>
+      <div class="domain-bar-wrap">
+        <div class="domain-bar-fill" style="width:${(count/max)*100}%;background:${DOMAIN_COLORS[i%DOMAIN_COLORS.length]}"></div>
+      </div>
+      <div class="domain-count">${count}</div>
+    </div>
+  `).join('');
+}
+
+function buildStack(history) {
+  const body = document.getElementById('stack-body');
+  const totalEl = document.getElementById('stack-total');
+  if (!history.length) {
+    body.innerHTML = '<div class="empty"><div class="empty-icon">◻</div><div class="empty-title">No data yet</div></div>';
+    totalEl.textContent = '';
+    return;
+  }
+  const counts = {};
+  history.forEach(p => {
+    (p.tech_stack || '').split(',').forEach(t => {
+      const tech = t.trim().replace(/\(.*\)/, '').trim();
+      if (tech) counts[tech] = (counts[tech] || 0) + 1;
+    });
+  });
+  const sorted = Object.entries(counts).sort((a,b) => b[1]-a[1]);
+  totalEl.textContent = sorted.length + ' technologies';
+  body.innerHTML = `<div class="stack-cloud">${
+    sorted.map(([name, count]) => `
+      <div class="stack-chip">
+        ${name}
+        ${count > 1 ? `<span class="stack-chip-count">×${count}</span>` : ''}
+      </div>
+    `).join('')
+  }</div>`;
+}
+
+function buildHistory(history) {
+  const body = document.getElementById('history-body');
+  const countEl = document.getElementById('history-count');
+  countEl.textContent = history.length + ' project' + (history.length !== 1 ? 's' : '');
+  if (!history.length) {
+    body.innerHTML = '<div class="empty"><div class="empty-icon">◻</div><div class="empty-title">No projects yet</div><div class="empty-sub">History appears after first build</div></div>';
+    return;
+  }
+  body.innerHTML = `<table>
+    <thead>
+      <tr>
+        <th>Project</th>
+        <th>Domain</th>
+        <th>Stack</th>
+        <th>Date</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${history.map(p => `
+        <tr onclick="${p.github ? `window.open('${p.github}','_blank')` : ''}">
+          <td class="td-name">${p.github ? `<a href="${p.github}" target="_blank">${p.repo_name}</a>` : p.repo_name}</td>
+          <td><span class="domain-pill">${(p.domain||'').split('&')[0].trim()}</span></td>
+          <td><div class="mini-tags">${(p.tech_stack||'').split(',').slice(0,3).map(t=>`<span class="mini-tag">${t.trim().replace(/\(.*\)/,'').trim()}</span>`).join('')}</div></td>
+          <td style="color:var(--text3);font-family:var(--font-mono);font-size:10px;white-space:nowrap">${p.date}</td>
+          <td><span class="status-pill ${p.status==='COMPLETE'?'sp-complete':'sp-progress'}">${p.status}</span></td>
+        </tr>
+      `).join('')}
+    </tbody>
+  </table>`;
+}
+
+function buildLog(logs) {
+  const list = document.getElementById('log-list');
+  const countEl = document.getElementById('log-count');
+  countEl.textContent = logs.length + ' entries';
+  if (!logs.length) {
+    list.innerHTML = '<div class="empty"><div class="empty-sub">No sessions yet</div></div>';
+    return;
+  }
+  list.innerHTML = [...logs].reverse().map(l => {
+    const dotClass = {new:'ld-new',resume:'ld-resume',end:'ld-end',error:'ld-error'}[l.type] || 'ld-start';
+    return `<div class="log-item">
+      <div class="log-dot ${dotClass}"></div>
+      <div class="log-time">${l.time}</div>
+      <div class="log-msg">${l.message}</div>
+    </div>`;
+  }).join('');
+}
+
+function buildSessionStats(logs, sessions) {
+  const errors = logs.filter(l => l.type === 'error').length;
+  const builds = logs.filter(l => l.type === 'new').length;
+  const lastLog = logs[logs.length - 1];
+  const firstLog = logs[0];
+  document.getElementById('ss-total').textContent = sessions;
+  document.getElementById('ss-builds').textContent = builds;
+  document.getElementById('ss-errors').textContent = errors;
+  document.getElementById('ss-last').textContent = lastLog ? timeAgo(lastLog.date + ' ' + lastLog.time) : '—';
+  document.getElementById('ss-first').textContent = firstLog ? firstLog.date : '—';
+}
+
+function render(data) {
+  document.getElementById('nav-time').textContent = 'Updated ' + data.last_updated;
+
+  const h = data.history || [];
+  const logs = data.session_log || [];
+  const sessions = data.session_count || 0;
+  const active = data.active;
+
+  // stats
+  const done = h.filter(p => p.status === 'COMPLETE').length;
+  const wip = h.filter(p => p.status !== 'COMPLETE').length;
+  const rate = h.length ? Math.round((done/h.length)*100) : null;
+  document.getElementById('s-total').textContent = h.length;
+  document.getElementById('s-done').textContent = done;
+  document.getElementById('s-wip').textContent = wip;
+  document.getElementById('s-rate').textContent = rate !== null ? rate + '%' : '—';
+  document.getElementById('s-rate-sub').textContent = rate !== null ? `${done}/${h.length} complete` : '';
+  document.getElementById('s-sessions').textContent = sessions;
+
+  if (active) {
+    document.getElementById('s-active').textContent = 'YES';
+    document.getElementById('s-active').className = 'stat-value c-green';
+    document.getElementById('s-active-sub').textContent = active.name;
+  } else {
+    document.getElementById('s-active').textContent = 'NO';
+    document.getElementById('s-active').className = 'stat-value';
+    document.getElementById('s-active-sub').textContent = '';
+  }
+
+  // streak
+  const streak = calcStreak(h);
+  document.getElementById('streak-num').textContent = streak;
+  document.getElementById('streak-msg').textContent = streak > 0
+    ? `— ${streak === 1 ? 'keep it going!' : streak >= 3 ? 'on fire! 🚀' : 'great consistency!'}`
+    : '— start building to begin your streak';
+
+  // active project
+  const ghEl = document.getElementById('active-gh');
+  const activeBody = document.getElementById('active-body');
+  if (active) {
+    const proj = h.find(p => p.repo_name === active.name) || {};
+    ghEl.innerHTML = proj.github
+      ? `<a href="${proj.github}" target="_blank" style="font-size:10px;color:var(--blue);font-family:var(--font-mono);text-decoration:none;border:1px solid var(--border2);padding:3px 10px;border-radius:5px;">↗ GitHub</a>`
+      : '';
+    const total = active.completed.length + active.next_steps.length;
+    const pct = total > 0 ? Math.round((active.completed.length / total) * 100) : 0;
+    activeBody.innerHTML = `
+      <div class="proj-name">${active.name}</div>
+      <div class="proj-tagline">${active.in_progress || 'Building...'}</div>
+      <span class="status-badge sb-progress"><span class="sb-dot"></span>In Progress</span>
+      <div class="progress-wrap">
+        <div class="progress-label">
+          <span>Progress</span>
+          <span>${active.completed.length} / ${total} steps — ${pct}%</span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
+      </div>
+      <div class="meta-row">
+        <div class="meta-box"><div class="meta-key">Session</div><div class="meta-val">#${active.session}</div></div>
+        <div class="meta-box"><div class="meta-key">Last updated</div><div class="meta-val">${timeAgo(active.last_modified)}</div></div>
+      </div>
+      ${active.next_steps.length ? `
+        <div class="steps-section">
+          <div class="steps-label">Next Steps</div>
+          ${active.next_steps.slice(0,3).map(s=>`
+            <div class="step-row"><span class="step-icon" style="color:var(--blue)">→</span>${s}</div>
+          `).join('')}
+        </div>
+      ` : ''}
+    `;
+  } else {
+    ghEl.innerHTML = '';
+    activeBody.innerHTML = `<div class="empty"><div class="empty-icon">◻</div><div class="empty-title">No active project</div><div class="empty-sub">Run start.sh to begin</div></div>`;
+  }
+
+  buildHeatmap(h);
+  buildDomains(h);
+  buildStack(h);
+  buildHistory(h);
+  buildLog(logs);
+  buildSessionStats(logs, sessions);
+}
+
+function setLive(on) {
+  document.getElementById('live-badge').className = on ? 'live-badge' : 'live-badge offline';
+  document.getElementById('live-text').textContent = on ? 'LIVE' : 'OFFLINE';
+}
+
+async function load() {
+  try {
+    const res = await fetch('/api/data', { cache: 'no-store' });
+    if (!res.ok) throw new Error();
+    render(await res.json());
+    setLive(true);
+  } catch {
+    setLive(false);
+  }
+}
+
+let es = null;
+function connectStream() {
+  if (es) { try { es.close(); } catch {} }
+  try {
+    es = new EventSource('/api/stream');
+  } catch {
+    setLive(false);
+    return;
+  }
+  es.addEventListener('data', (e) => {
+    try {
+      render(JSON.parse(e.data));
+      setLive(true);
+    } catch { /* ignore parse errors */ }
+  });
+  es.onerror = () => setLive(false);
+  es.onopen = () => setLive(true);
+}
+
+function reconnect() {
+  load();
+  connectStream();
+}
+
+load();
+connectStream();
+</script>
+</body>
+</html>
