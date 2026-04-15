@@ -15,3 +15,10 @@
 - Tech stack: Python, Scapy, FastAPI, Pydantic, React, TypeScript, Vite, Tailwind v4, D3.js
 - Status: COMPLETE
 - GitHub: https://github.com/rayancheca/packet-replay-forge
+
+2026-04-14 — logflow-anomaly-engine
+- Domain: Big Data, Data Engineering & Analytics Pipelines
+- Description: Real-time log-stream anomaly detection with visual blast-radius mapping across service dependency graphs.
+- Tech stack: Python, FastAPI, DuckDB, scikit-learn (IsolationForest), Drain, React, TypeScript, Vite, Tailwind v3, D3.js
+- Status: COMPLETE
+- GitHub: https://github.com/rayancheca/logflow-anomaly-engine

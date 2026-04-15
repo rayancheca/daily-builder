@@ -6,7 +6,9 @@ import re
 import subprocess
 import sys
 import time
-from datetime import datetime
+from collections import defaultdict, Counter
+from datetime import datetime, timedelta
+from urllib.parse import urlparse, parse_qs
 
 PORT = 8765
 DASHBOARD_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -14,29 +16,256 @@ PROJECTS_DIR = os.path.expanduser("~/dev/daily-projects")
 HISTORY_FILE = os.path.expanduser("~/daily-builder/project_history.md")
 LOG_FILE = os.path.expanduser("~/daily-builder/session.log")
 
+SKIP_DIRS = {
+    '.git', '.venv', 'venv', 'env', 'node_modules', '__pycache__',
+    'dist', 'build', '.next', '.cache', 'target', '.idea', '.vscode',
+    'coverage', '.pytest_cache', '.mypy_cache', '.ruff_cache', 'site-packages',
+}
+
+LANG_BY_EXT = {
+    '.py': 'Python', '.pyi': 'Python',
+    '.js': 'JavaScript', '.mjs': 'JavaScript', '.cjs': 'JavaScript',
+    '.ts': 'TypeScript', '.tsx': 'TypeScript', '.jsx': 'JavaScript',
+    '.go': 'Go',
+    '.rs': 'Rust',
+    '.html': 'HTML', '.htm': 'HTML',
+    '.css': 'CSS', '.scss': 'SCSS', '.sass': 'SCSS',
+    '.md': 'Markdown', '.mdx': 'Markdown',
+    '.json': 'JSON',
+    '.yaml': 'YAML', '.yml': 'YAML',
+    '.sh': 'Shell', '.bash': 'Shell', '.zsh': 'Shell',
+    '.toml': 'TOML',
+    '.sql': 'SQL',
+    '.vue': 'Vue',
+    '.svelte': 'Svelte',
+    '.java': 'Java',
+    '.kt': 'Kotlin', '.kts': 'Kotlin',
+    '.swift': 'Swift',
+    '.c': 'C', '.h': 'C',
+    '.cpp': 'C++', '.cc': 'C++', '.hpp': 'C++',
+    '.rb': 'Ruby',
+    '.php': 'PHP',
+}
+
+LANG_COLORS = {
+    'Python': '#3776ab', 'JavaScript': '#f7df1e', 'TypeScript': '#3178c6',
+    'Go': '#00add8', 'Rust': '#dea584', 'HTML': '#e34c26', 'CSS': '#563d7c',
+    'SCSS': '#c6538c', 'Markdown': '#5478b3', 'JSON': '#cbcb41',
+    'YAML': '#cb171e', 'Shell': '#89e051', 'TOML': '#9c4221', 'SQL': '#e38c00',
+    'Vue': '#41b883', 'Svelte': '#ff3e00', 'Java': '#b07219',
+    'Kotlin': '#a97bff', 'Swift': '#fa7343', 'C': '#555555',
+    'C++': '#f34b7d', 'Ruby': '#cc342d', 'PHP': '#4f5d95', 'Other': '#888',
+}
+
 
 def _log(msg: str) -> None:
     print(f"[dashboard] {msg}", file=sys.stderr, flush=True)
 
 
-def _git_commit_subjects(project_dir: str) -> list[str]:
-    """Return commit subjects in chronological order, skipping pure scaffolding."""
-    if not os.path.isdir(os.path.join(project_dir, ".git")):
-        return []
+def _run_git(project_dir, *args, timeout=5):
+    if not os.path.isdir(os.path.join(project_dir, '.git')):
+        return None
     try:
-        result = subprocess.run(
-            ["git", "-C", project_dir, "log", "--reverse", "--pretty=format:%s"],
-            capture_output=True,
-            text=True,
-            timeout=2,
+        r = subprocess.run(
+            ['git', '-C', project_dir, *args],
+            capture_output=True, text=True, timeout=timeout,
         )
-    except (subprocess.SubprocessError, FileNotFoundError) as exc:
-        _log(f"git log failed for {project_dir}: {exc}")
+        return r.stdout if r.returncode == 0 else None
+    except (subprocess.SubprocessError, FileNotFoundError) as e:
+        _log(f"git {' '.join(args)} failed in {project_dir}: {e}")
+        return None
+
+
+_GENERATED_RE = re.compile(
+    r'(^|/)('
+    r'package-lock\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb|'
+    r'poetry\.lock|uv\.lock|Pipfile\.lock|Cargo\.lock|Gemfile\.lock|'
+    r'composer\.lock|go\.sum|'
+    r'node_modules|vendor|dist|build|\.next|\.cache|coverage|'
+    r'__pycache__|\.venv|venv|target|\.terraform'
+    r')(/|$)',
+    re.IGNORECASE,
+)
+
+
+def _is_generated(path):
+    return bool(_GENERATED_RE.search(path))
+
+
+def _git_log_full(project_dir, limit=200):
+    out = _run_git(
+        project_dir, 'log', f'-{limit}',
+        '--pretty=format:__C__%H|%h|%an|%at|%s', '--numstat',
+    )
+    if out is None:
         return []
-    if result.returncode != 0:
-        return []
-    subjects = [s.strip() for s in result.stdout.splitlines() if s.strip()]
-    return [s for s in subjects if not re.match(r"^(chore|docs):\s*scaffold", s, re.I)]
+    commits = []
+    cur = None
+    for line in out.splitlines():
+        if line.startswith('__C__'):
+            if cur:
+                commits.append(cur)
+            parts = line[5:].split('|', 4)
+            if len(parts) < 5:
+                cur = None
+                continue
+            cur = {
+                'sha': parts[0], 'short': parts[1], 'author': parts[2],
+                'timestamp': int(parts[3]), 'subject': parts[4],
+                'additions': 0, 'deletions': 0,
+                'files_changed': 0, 'files': [],
+            }
+        elif cur and line.strip():
+            parts = line.split('\t')
+            if len(parts) == 3:
+                add, dele, fname = parts
+                if _is_generated(fname):
+                    continue
+                try:
+                    add_n = int(add) if add != '-' else 0
+                    del_n = int(dele) if dele != '-' else 0
+                except ValueError:
+                    add_n = del_n = 0
+                cur['additions'] += add_n
+                cur['deletions'] += del_n
+                cur['files_changed'] += 1
+                if len(cur['files']) < 20:
+                    cur['files'].append({'path': fname, 'add': add_n, 'del': del_n})
+    if cur:
+        commits.append(cur)
+    return commits
+
+
+def _git_status(project_dir):
+    out = _run_git(project_dir, 'status', '--porcelain')
+    if out is None:
+        return {'clean': True, 'modified': [], 'added': [], 'untracked': []}
+    modified, added, untracked = [], [], []
+    for line in out.splitlines():
+        if not line:
+            continue
+        code = line[:2]
+        path = line[3:]
+        if code.strip() == '??':
+            untracked.append(path)
+        elif 'M' in code:
+            modified.append(path)
+        elif 'A' in code:
+            added.append(path)
+    return {
+        'clean': not (modified or added or untracked),
+        'modified': modified, 'added': added, 'untracked': untracked,
+    }
+
+
+def _git_remote_url(project_dir):
+    out = _run_git(project_dir, 'remote', 'get-url', 'origin')
+    if not out:
+        return None
+    url = out.strip()
+    if url.startswith('git@github.com:'):
+        url = 'https://github.com/' + url[len('git@github.com:'):]
+    if url.endswith('.git'):
+        url = url[:-4]
+    return url
+
+
+def _git_branch(project_dir):
+    out = _run_git(project_dir, 'rev-parse', '--abbrev-ref', 'HEAD')
+    return out.strip() if out else None
+
+
+def _walk_files(project_dir, max_files=2000):
+    files = []
+    for root, dirs, fnames in os.walk(project_dir):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith('.')]
+        for fname in fnames:
+            if fname.startswith('.') or fname.endswith('.pyc'):
+                continue
+            full = os.path.join(root, fname)
+            rel = os.path.relpath(full, project_dir)
+            try:
+                st = os.stat(full)
+            except OSError:
+                continue
+            ext = os.path.splitext(fname)[1].lower()
+            files.append({
+                'path': rel, 'name': fname, 'size': st.st_size,
+                'mtime': st.st_mtime, 'ext': ext,
+                'lang': LANG_BY_EXT.get(ext, 'Other'),
+            })
+            if len(files) >= max_files:
+                return files
+    return files
+
+
+def _count_lines(filepath):
+    try:
+        with open(filepath, 'rb') as f:
+            return sum(1 for _ in f)
+    except OSError:
+        return 0
+
+
+def _language_stats(files, project_dir):
+    by_lang = defaultdict(lambda: {'files': 0, 'lines': 0, 'bytes': 0})
+    for f in files:
+        if f['lang'] == 'Other':
+            continue
+        by_lang[f['lang']]['files'] += 1
+        by_lang[f['lang']]['bytes'] += f['size']
+        if f['size'] < 1_000_000:
+            by_lang[f['lang']]['lines'] += _count_lines(os.path.join(project_dir, f['path']))
+    return [
+        {'lang': lang, 'color': LANG_COLORS.get(lang, '#888'), **stats}
+        for lang, stats in sorted(by_lang.items(), key=lambda kv: -kv[1]['lines'])
+    ]
+
+
+def _readme_content(project_dir, max_chars=12000):
+    for name in ('README.md', 'readme.md', 'Readme.md'):
+        path = os.path.join(project_dir, name)
+        if os.path.exists(path):
+            try:
+                with open(path) as f:
+                    return f.read(max_chars)
+            except OSError:
+                continue
+    return None
+
+
+def _build_file_tree(files):
+    tree = {'name': '/', 'type': 'dir', 'children': {}}
+    for f in files:
+        parts = f['path'].split(os.sep)
+        node = tree
+        for i, part in enumerate(parts):
+            is_last = i == len(parts) - 1
+            children = node.setdefault('children', {})
+            if part not in children:
+                children[part] = {
+                    'name': part,
+                    'type': 'file' if is_last else 'dir',
+                    'children': {} if not is_last else None,
+                    'size': f['size'] if is_last else 0,
+                    'lang': f['lang'] if is_last else None,
+                }
+            node = children[part]
+
+    def to_list(n):
+        out = {'name': n['name'], 'type': n['type']}
+        if n['type'] == 'file':
+            out['size'] = n.get('size', 0)
+            out['lang'] = n.get('lang')
+        else:
+            kids = n.get('children') or {}
+            out['children'] = sorted(
+                [to_list(c) for c in kids.values()],
+                key=lambda x: (x['type'] == 'file', x['name']),
+            )
+        return out
+    return to_list(tree)
+
 
 def parse_history():
     projects = []
@@ -52,85 +281,186 @@ def parse_history():
             if current:
                 projects.append(current)
             current = {
-                'date': m.group(1),
-                'repo_name': m.group(2).strip(),
-                'domain': '', 'description': '',
-                'tech_stack': '', 'status': 'UNKNOWN', 'github': ''
+                'date': m.group(1), 'repo_name': m.group(2).strip(),
+                'domain': '', 'description': '', 'tech_stack': '',
+                'status': 'UNKNOWN', 'github': '',
             }
         elif current and line.startswith('- '):
             line = line[2:]
-            if line.startswith('Domain:'):
-                current['domain'] = line.replace('Domain:', '').strip()
-            elif line.startswith('Description:'):
-                current['description'] = line.replace('Description:', '').strip()
-            elif line.startswith('Tech stack:'):
-                current['tech_stack'] = line.replace('Tech stack:', '').strip()
-            elif line.startswith('Status:'):
-                current['status'] = line.replace('Status:', '').strip()
-            elif line.startswith('GitHub:'):
-                current['github'] = line.replace('GitHub:', '').strip()
+            for key in ('Domain', 'Description', 'Tech stack', 'Status', 'GitHub'):
+                if line.startswith(key + ':'):
+                    field = key.lower().replace(' ', '_')
+                    current[field] = line.replace(key + ':', '').strip()
+                    break
     if current:
         projects.append(current)
     return list(reversed(projects))
 
 
-def parse_active_project():
-    if not os.path.exists(PROJECTS_DIR):
+def parse_state_file(project_dir):
+    state_path = os.path.join(project_dir, 'state.md')
+    if not os.path.exists(state_path):
         return None
-    try:
-        dirs = sorted(os.listdir(PROJECTS_DIR), reverse=True)
-    except:
-        return None
-    for name in dirs:
-        project_dir = os.path.join(PROJECTS_DIR, name)
-        state_path = os.path.join(project_dir, 'state.md')
-        if not os.path.exists(state_path):
-            continue
-        with open(state_path) as f:
-            content = f.read()
-        status_match = re.search(r'## Status\s*\n\s*([A-Z ]+)', content)
-        status_value = status_match.group(1).strip() if status_match else ''
-        if status_value == 'COMPLETE':
-            continue
-        mtime = os.path.getmtime(state_path)
-        project = {
-            'name': name,
-            'status': 'IN PROGRESS',
-            'session': '1',
-            'in_progress': '',
-            'next_steps': [],
-            'completed': [],
-            'last_modified': datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')
-        }
-        m = re.search(r'## Session count\n(\d+)', content)
-        if m:
-            project['session'] = m.group(1)
-        m = re.search(r'## In progress\n(.+?)(?=\n##)', content, re.DOTALL)
-        if m:
-            project['in_progress'] = m.group(1).strip()
-        m = re.search(r'## Next steps\n(.+?)(?=\n##)', content, re.DOTALL)
-        if m:
-            steps = [s.lstrip('0123456789. ') for s in m.group(1).strip().split('\n') if s.strip()]
-            project['next_steps'] = steps
-        m = re.search(r'## Completed steps\n(.+?)(?=\n##)', content, re.DOTALL)
-        if m:
-            comp = m.group(1).strip()
-            if comp and comp != 'None yet.':
-                project['completed'] = [re.sub(r'^[-\s]+', '', s) for s in comp.split('\n') if s.strip()]
+    with open(state_path) as f:
+        content = f.read()
+    status_match = re.search(r'## Status\s*\n\s*([A-Z ]+)', content)
+    status = status_match.group(1).strip() if status_match else 'UNKNOWN'
+    state = {
+        'status': status, 'session': '1', 'in_progress': '',
+        'completed': [], 'next_steps': [],
+    }
+    m = re.search(r'## Session count\n(\d+)', content)
+    if m:
+        state['session'] = m.group(1)
+    m = re.search(r'## In progress\n(.+?)(?=\n##)', content, re.DOTALL)
+    if m:
+        state['in_progress'] = m.group(1).strip()
+    m = re.search(r'## Next steps\n(.+?)(?=\n##)', content, re.DOTALL)
+    if m:
+        state['next_steps'] = [
+            re.sub(r'^\d+\.\s*', '', s).strip()
+            for s in m.group(1).strip().split('\n') if s.strip()
+        ]
+    m = re.search(r'## Completed steps\n(.+?)(?=\n##)', content, re.DOTALL)
+    if m:
+        comp = m.group(1).strip()
+        if comp and comp != 'None yet.':
+            state['completed'] = [
+                re.sub(r'^[-\s]+', '', s).strip()
+                for s in comp.split('\n') if s.strip()
+            ]
+    return state
 
-        # state.md is the agent's self-report — but Claude often forgets to update it.
-        # Git commits are the ground truth for "work that actually shipped", so use
-        # them as a fallback signal when the declared step count lags real history.
-        commits = _git_commit_subjects(project_dir)
-        if len(commits) > len(project['completed']):
-            _log(f"{name}: state.md reports {len(project['completed'])} completed, "
-                 f"git has {len(commits)} commits — using git as source of truth")
-            project['completed'] = commits
-            commit_mtime = os.path.getmtime(os.path.join(project_dir, '.git'))
-            if commit_mtime > mtime:
-                project['last_modified'] = datetime.fromtimestamp(commit_mtime).strftime('%Y-%m-%d %H:%M')
-        return project
-    return None
+
+def project_summary(name):
+    project_dir = os.path.join(PROJECTS_DIR, name)
+    if not os.path.isdir(project_dir):
+        return None
+    state = parse_state_file(project_dir)
+    log = _git_log_full(project_dir, limit=200)
+    status = state['status'] if state else 'UNKNOWN'
+    completed = state['completed'] if state else []
+    next_steps = state['next_steps'] if state else []
+    git_subjects = [c['subject'] for c in reversed(log)
+                    if not re.match(r'^(chore|docs):\s*scaffold', c['subject'], re.I)]
+    if len(git_subjects) > len(completed):
+        completed = git_subjects
+    state_path = os.path.join(project_dir, 'state.md')
+    state_mtime = os.path.getmtime(state_path) if os.path.exists(state_path) else 0
+    git_dir = os.path.join(project_dir, '.git')
+    git_mtime = os.path.getmtime(git_dir) if os.path.isdir(git_dir) else 0
+    return {
+        'name': name, 'status': status,
+        'session': state['session'] if state else '1',
+        'in_progress': state['in_progress'] if state else '',
+        'completed': completed, 'next_steps': next_steps,
+        'commit_count': len(log),
+        'additions': sum(c['additions'] for c in log),
+        'deletions': sum(c['deletions'] for c in log),
+        'first_commit': log[-1]['timestamp'] if log else None,
+        'last_commit': log[0]['timestamp'] if log else None,
+        'last_modified': max(state_mtime, git_mtime),
+        'github': _git_remote_url(project_dir),
+        'branch': _git_branch(project_dir),
+    }
+
+
+def all_projects():
+    if not os.path.isdir(PROJECTS_DIR):
+        return []
+    out = []
+    for name in sorted(os.listdir(PROJECTS_DIR)):
+        full = os.path.join(PROJECTS_DIR, name)
+        if not os.path.isdir(full):
+            continue
+        s = project_summary(name)
+        if s:
+            out.append(s)
+    return out
+
+
+def streak_calendar(projects, days=365):
+    today = datetime.now().date()
+    start = today - timedelta(days=days - 1)
+    by_day = defaultdict(int)
+    for p in projects:
+        log = _git_log_full(os.path.join(PROJECTS_DIR, p['name']), limit=500)
+        for c in log:
+            d = datetime.fromtimestamp(c['timestamp']).date()
+            if d >= start:
+                by_day[d.isoformat()] += 1
+    cal = []
+    for i in range(days):
+        d = start + timedelta(days=i)
+        cal.append({
+            'date': d.isoformat(),
+            'count': by_day.get(d.isoformat(), 0),
+            'weekday': d.weekday(),
+        })
+    return cal
+
+
+def calc_streak(cal):
+    today = datetime.now().date()
+    by_day = {c['date']: c['count'] for c in cal}
+    streak = 0
+    d = today
+    while by_day.get(d.isoformat(), 0) > 0:
+        streak += 1
+        d -= timedelta(days=1)
+    return streak
+
+
+def cross_stats(projects):
+    total_commits = sum(p['commit_count'] for p in projects)
+    total_adds = sum(p['additions'] for p in projects)
+    total_dels = sum(p['deletions'] for p in projects)
+    completed = sum(1 for p in projects if p['status'] == 'COMPLETE')
+    lang_files = Counter()
+    for p in projects:
+        files = _walk_files(os.path.join(PROJECTS_DIR, p['name']), max_files=600)
+        for f in files:
+            if f['lang'] != 'Other':
+                lang_files[f['lang']] += 1
+    return {
+        'total_projects': len(projects),
+        'completed_projects': completed,
+        'total_commits': total_commits,
+        'total_additions': total_adds,
+        'total_deletions': total_dels,
+        'languages': [
+            {'lang': l, 'count': n, 'color': LANG_COLORS.get(l, '#888')}
+            for l, n in lang_files.most_common(15)
+        ],
+    }
+
+
+def commit_velocity(projects, days=30):
+    today = datetime.now().date()
+    start = today - timedelta(days=days - 1)
+    by_day = defaultdict(int)
+    for p in projects:
+        log = _git_log_full(os.path.join(PROJECTS_DIR, p['name']), limit=500)
+        for c in log:
+            d = datetime.fromtimestamp(c['timestamp']).date()
+            if d >= start:
+                by_day[d.isoformat()] += 1
+    return [
+        {'date': (start + timedelta(days=i)).isoformat(),
+         'count': by_day.get((start + timedelta(days=i)).isoformat(), 0)}
+        for i in range(days)
+    ]
+
+
+def hour_heatmap(projects):
+    grid = [[0] * 24 for _ in range(7)]
+    for p in projects:
+        log = _git_log_full(os.path.join(PROJECTS_DIR, p['name']), limit=500)
+        for c in log:
+            dt = datetime.fromtimestamp(c['timestamp'])
+            grid[dt.weekday()][dt.hour] += 1
+    return grid
+
 
 def parse_session_log():
     entries = []
@@ -157,27 +487,82 @@ def parse_session_log():
         elif 'ended' in msg:
             entry_type = 'end'
         entries.append({
-            'time': time_str[11:],
-            'date': time_str[:10],
-            'message': msg,
-            'type': entry_type
+            'time': time_str[11:], 'date': time_str[:10],
+            'message': msg, 'type': entry_type,
         })
     return entries
 
-def count_sessions():
-    if not os.path.exists(LOG_FILE):
-        return 0
-    with open(LOG_FILE) as f:
-        content = f.read()
-    return len(re.findall(r'Session started', content))
 
-def get_data():
+def recent_commits_global(projects, limit=30):
+    rows = []
+    for p in projects:
+        log = _git_log_full(os.path.join(PROJECTS_DIR, p['name']), limit=50)
+        for c in log:
+            rows.append({**c, 'project': p['name']})
+    rows.sort(key=lambda x: -x['timestamp'])
+    return rows[:limit]
+
+
+def get_overview():
+    projects = all_projects()
+    history = parse_history()
+    history_by_name = {h['repo_name']: h for h in history}
+    for p in projects:
+        h = history_by_name.get(p['name'])
+        if h:
+            p['domain'] = h.get('domain', '')
+            p['description'] = h.get('description', '')
+            p['tech_stack'] = h.get('tech_stack', '')
+            if h.get('github'):
+                p['github'] = h['github']
+            if h.get('status') == 'COMPLETE':
+                p['status'] = 'COMPLETE'
+    active = next((p for p in projects if p['status'] != 'COMPLETE'), None)
+    cal = streak_calendar(projects, days=365)
     return {
-        'active': parse_active_project(),
-        'history': parse_history(),
+        'projects': projects,
+        'active': active,
+        'history': history,
         'session_log': parse_session_log(),
-        'session_count': count_sessions(),
-        'last_updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        'streak_calendar': cal,
+        'streak': calc_streak(cal),
+        'cross_stats': cross_stats(projects),
+        'velocity': commit_velocity(projects, days=30),
+        'heatmap': hour_heatmap(projects),
+        'recent_commits': recent_commits_global(projects, limit=30),
+        'last_updated': datetime.now().isoformat(),
+    }
+
+
+def get_project_detail(name):
+    project_dir = os.path.join(PROJECTS_DIR, name)
+    if not os.path.isdir(project_dir):
+        return None
+    summary = project_summary(name)
+    if summary is None:
+        return None
+    files = _walk_files(project_dir)
+    langs = _language_stats(files, project_dir)
+    log = _git_log_full(project_dir, limit=200)
+    status = _git_status(project_dir)
+    readme = _readme_content(project_dir)
+    tree = _build_file_tree(files)
+    total_lines = sum(l['lines'] for l in langs)
+    commits_by_day = defaultdict(int)
+    for c in log:
+        d = datetime.fromtimestamp(c['timestamp']).date().isoformat()
+        commits_by_day[d] += 1
+    return {
+        **summary,
+        'files': len(files),
+        'file_tree': tree,
+        'languages': langs,
+        'commits': log,
+        'git_status': status,
+        'readme': readme,
+        'total_lines': total_lines,
+        'total_files': len(files),
+        'commits_by_day': dict(commits_by_day),
     }
 
 
@@ -185,18 +570,17 @@ def _watched_paths():
     paths = [HISTORY_FILE, LOG_FILE]
     if os.path.isdir(PROJECTS_DIR):
         for name in os.listdir(PROJECTS_DIR):
-            project_dir = os.path.join(PROJECTS_DIR, name)
-            if not os.path.isdir(project_dir):
+            d = os.path.join(PROJECTS_DIR, name)
+            if not os.path.isdir(d):
                 continue
-            paths.append(os.path.join(project_dir, 'state.md'))
-            paths.append(os.path.join(project_dir, '.git'))
-            paths.append(os.path.join(project_dir, '.git', 'HEAD'))
-            paths.append(os.path.join(project_dir, '.git', 'refs', 'heads'))
+            paths.append(os.path.join(d, 'state.md'))
+            paths.append(os.path.join(d, '.git'))
+            paths.append(os.path.join(d, '.git', 'HEAD'))
+            paths.append(os.path.join(d, '.git', 'refs', 'heads'))
     return paths
 
 
 def fingerprint() -> str:
-    """Cheap signature of every file the dashboard renders. Changes ⇒ push."""
     parts = []
     for p in _watched_paths():
         try:
@@ -206,28 +590,118 @@ def fingerprint() -> str:
             parts.append(f"{p}:-")
     return "|".join(parts)
 
+
 class Handler(http.server.SimpleHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == '/api/data':
-            data = get_data()
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Cache-Control', 'no-store')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(data).encode())
-        elif self.path == '/api/stream':
-            self._serve_stream()
-        elif self.path in ('/', '/index.html'):
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/html')
-            self.send_header('Cache-Control', 'no-store')
-            self.end_headers()
-            with open(os.path.join(DASHBOARD_DIR, 'index.html'), 'rb') as f:
-                self.wfile.write(f.read())
-        else:
+    def _json(self, data, status=200):
+        body = json.dumps(data, default=str).encode()
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_file(self, path, ctype):
+        try:
+            with open(path, 'rb') as f:
+                body = f.read()
+        except OSError:
             self.send_response(404)
             self.end_headers()
+            return
+        self.send_response(200)
+        self.send_header('Content-Type', ctype)
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        u = urlparse(self.path)
+        p = u.path
+        q = parse_qs(u.query)
+        if p == '/api/data':
+            self._json(get_overview())
+            return
+        if p == '/api/project':
+            name = q.get('name', [''])[0]
+            d = get_project_detail(name)
+            self._json(d) if d else self._json({'error': 'not found'}, status=404)
+            return
+        if p == '/api/file':
+            self._serve_project_file(q.get('proj', [''])[0], q.get('path', [''])[0])
+            return
+        if p == '/api/commit':
+            self._serve_commit_diff(q.get('proj', [''])[0], q.get('sha', [''])[0])
+            return
+        if p == '/api/stream':
+            self._serve_stream()
+            return
+        if p in ('/', '/index.html'):
+            self._serve_file(os.path.join(DASHBOARD_DIR, 'index.html'), 'text/html')
+            return
+        if p == '/style.css':
+            self._serve_file(os.path.join(DASHBOARD_DIR, 'style.css'), 'text/css')
+            return
+        if p == '/app.js':
+            self._serve_file(os.path.join(DASHBOARD_DIR, 'app.js'), 'application/javascript')
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def _safe_project_dir(self, name):
+        if not name:
+            return None
+        full = os.path.realpath(os.path.join(PROJECTS_DIR, name))
+        root = os.path.realpath(PROJECTS_DIR)
+        if not full.startswith(root + os.sep):
+            return None
+        return full if os.path.isdir(full) else None
+
+    def _serve_project_file(self, name, file_path):
+        project_dir = self._safe_project_dir(name)
+        if not project_dir or not file_path:
+            self._json({'error': 'invalid params'}, status=400)
+            return
+        full = os.path.realpath(os.path.join(project_dir, file_path))
+        if not full.startswith(project_dir + os.sep):
+            self._json({'error': 'path traversal blocked'}, status=403)
+            return
+        if not os.path.isfile(full):
+            self._json({'error': 'not found'}, status=404)
+            return
+        try:
+            st = os.stat(full)
+            if st.st_size > 500_000:
+                self._json({'error': 'file too large', 'size': st.st_size}, status=413)
+                return
+            with open(full, 'rb') as f:
+                data = f.read()
+            try:
+                content = data.decode('utf-8')
+            except UnicodeDecodeError:
+                self._json({'error': 'binary file', 'size': st.st_size}, status=415)
+                return
+            self._json({
+                'path': file_path, 'size': st.st_size, 'content': content,
+                'lang': LANG_BY_EXT.get(os.path.splitext(file_path)[1].lower(), 'Other'),
+            })
+        except OSError as e:
+            self._json({'error': str(e)}, status=500)
+
+    def _serve_commit_diff(self, name, sha):
+        project_dir = self._safe_project_dir(name)
+        if not project_dir or not re.match(r'^[a-f0-9]{6,40}$', sha or ''):
+            self._json({'error': 'invalid params'}, status=400)
+            return
+        diff = _run_git(project_dir, 'show', '--stat', '--patch', '--no-color', sha)
+        if diff is None:
+            self._json({'error': 'commit not found'}, status=404)
+            return
+        if len(diff) > 200_000:
+            diff = diff[:200_000] + '\n... (truncated)'
+        self._json({'sha': sha, 'diff': diff})
 
     def _serve_stream(self):
         self.send_response(200)
@@ -243,7 +717,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             while True:
                 fp = fingerprint()
                 if fp != last_fp:
-                    payload = json.dumps(get_data()).encode()
+                    payload = json.dumps(get_overview(), default=str).encode()
                     self.wfile.write(b"event: data\ndata: ")
                     self.wfile.write(payload)
                     self.wfile.write(b"\n\n")
@@ -267,6 +741,7 @@ class ThreadedServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     allow_reuse_address = True
 
 
-print(f"Dashboard running at http://localhost:{PORT}")
-with ThreadedServer(("", PORT), Handler) as httpd:
-    httpd.serve_forever()
+if __name__ == '__main__':
+    print(f"Dashboard running at http://localhost:{PORT}")
+    with ThreadedServer(("", PORT), Handler) as httpd:
+        httpd.serve_forever()
