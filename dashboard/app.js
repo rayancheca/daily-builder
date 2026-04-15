@@ -31,14 +31,27 @@ const fmt = {
   },
 };
 
-const state = { data: null, charts: {}, currentDrawer: null, projectCache: {} };
+const state = {
+  data: null,
+  charts: {},
+  currentDrawer: null,
+  projectCache: {},
+  filter: 'all',
+  sort: 'recent',
+  paletteSel: 0,
+  paletteItems: [],
+};
 
 // === Lifecycle ===
 async function init() {
+  startClock();
   await load();
   connectStream();
   setupKeyboard();
   setupSearch();
+  setupFilters();
+  setupPalette();
+  setInterval(refreshTimes, 30000);
 }
 
 async function load() {
@@ -85,6 +98,7 @@ function setLive(on) {
 function render() {
   if (!state.data) return;
   const d = state.data;
+  renderTicker(d);
   renderHero(d);
   renderCalendar(d);
   renderLangChart(d);
@@ -93,6 +107,46 @@ function render() {
   renderProjects(d);
   renderCommitFeed(d);
   renderSessionLog(d);
+}
+
+function renderTicker(d) {
+  const stats = d.cross_stats;
+  const items = [
+    { label: 'Projects', value: stats.total_projects },
+    { label: 'Shipped', value: `${stats.completed_projects}/${stats.total_projects}` },
+    { label: 'Commits', value: fmt.num(stats.total_commits), accent: true },
+    { label: 'Lines', value: fmt.num(stats.total_lines) },
+    { label: 'Files', value: stats.total_files },
+    { label: 'Languages', value: stats.languages.length },
+    { label: 'Streak', value: `${d.streak}d`, accent: d.streak > 0 },
+    { label: 'Today', value: `${d.today_commits}c`, accent: d.today_commits > 0 },
+    { label: '7d', value: `${d.week_commits}c` },
+    { label: '+', value: fmt.num(stats.total_additions) },
+    { label: '−', value: fmt.num(stats.total_deletions) },
+  ];
+  $('#ticker-inner').innerHTML = items.map((it, i) => `
+    <div class="ticker-item ${it.accent ? 'accent' : ''}">${it.label} <strong>${it.value}</strong></div>
+    ${i < items.length - 1 ? '<div class="ticker-sep"></div>' : ''}
+  `).join('');
+}
+
+const _prevNums = {};
+function animateNumber(id, target, formatter = fmt.num) {
+  const el = $(`#${id}`);
+  if (!el) return;
+  const from = _prevNums[id] || 0;
+  if (from === target) { el.textContent = formatter(target); return; }
+  const start = performance.now();
+  const dur = 700;
+  const ease = t => 1 - Math.pow(1 - t, 3);
+  function tick(now) {
+    const t = Math.min(1, (now - start) / dur);
+    const v = Math.round(from + (target - from) * ease(t));
+    el.textContent = formatter(v);
+    if (t < 1) requestAnimationFrame(tick);
+    else _prevNums[id] = target;
+  }
+  requestAnimationFrame(tick);
 }
 
 function renderHero(d) {
@@ -127,10 +181,10 @@ function renderHero(d) {
   }
 
   $('#stat-projects').textContent = stats.total_projects;
-  $('#stat-completed').textContent = stats.completed_projects;
-  $('#stat-commits').textContent = fmt.num(stats.total_commits);
-  $('#stat-additions').textContent = fmt.num(stats.total_additions);
-  $('#stat-streak').textContent = d.streak;
+  animateNumber('stat-completed', stats.completed_projects, n => n);
+  animateNumber('stat-commits', stats.total_commits);
+  animateNumber('stat-additions', stats.total_additions);
+  animateNumber('stat-streak', d.streak, n => n);
 }
 
 function renderCalendar(d) {
@@ -170,23 +224,18 @@ function renderCalendar(d) {
     </div>
   `).join('');
 
-  // Month labels (above each new month start)
+  // Month labels — one slot per week column (15px gap-aligned), label at first week of each month
   const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  let labels = [];
   let lastMonth = -1;
-  weeks.forEach((w) => {
+  monthsEl.innerHTML = weeks.map(w => {
     const firstDay = w.find(x => x);
+    let label = '';
     if (firstDay) {
       const m = new Date(firstDay.date).getMonth();
-      if (m !== lastMonth) {
-        labels.push(monthNames[m]);
-        lastMonth = m;
-      } else {
-        labels.push('');
-      }
-    } else labels.push('');
-  });
-  monthsEl.innerHTML = labels.map(l => `<span style="width:15px;display:inline-block">${l}</span>`).join('');
+      if (m !== lastMonth) { label = monthNames[m]; lastMonth = m; }
+    }
+    return `<span class="cal-month-slot">${label}</span>`;
+  }).join('');
 
   const total = cal.reduce((s, c) => s + c.count, 0);
   const active = cal.filter(c => c.count > 0).length;
@@ -329,15 +378,33 @@ function renderHeatmap(d) {
 
 function renderProjects(d) {
   const wrap = $('#project-grid');
-  const projects = [...(d.projects || [])].sort((a, b) => (b.last_modified || 0) - (a.last_modified || 0));
-  $('#proj-count').textContent = `${projects.length} total`;
+  let projects = [...(d.projects || [])];
+  if (state.filter === 'building') projects = projects.filter(p => p.status !== 'COMPLETE');
+  if (state.filter === 'shipped') projects = projects.filter(p => p.status === 'COMPLETE');
+  const sorters = {
+    recent: (a, b) => (b.last_modified || 0) - (a.last_modified || 0),
+    commits: (a, b) => b.commit_count - a.commit_count,
+    lines: (a, b) => (b.additions - b.deletions) - (a.additions - a.deletions),
+    name: (a, b) => a.name.localeCompare(b.name),
+  };
+  projects.sort(sorters[state.sort] || sorters.recent);
+  $('#proj-count').textContent = `${projects.length} ${projects.length === 1 ? 'project' : 'projects'}`;
+  if (!projects.length) {
+    wrap.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:48px 24px;color:var(--text3);font-size:13px">
+      <div style="font-size:32px;opacity:0.4;margin-bottom:12px">∅</div>
+      No projects match this filter
+    </div>`;
+    return;
+  }
   wrap.innerHTML = projects.map(p => {
     const isActive = p.status !== 'COMPLETE';
     const total = p.completed.length + p.next_steps.length;
     const pct = total > 0 ? Math.round(100 * p.completed.length / total) : 0;
     const tagline = p.description || p.in_progress || '—';
+    const ago = p.last_commit ? fmt.ago(p.last_commit) : '—';
     return `
       <div class="project-card ${isActive ? 'active' : ''}" data-name="${escapeAttr(p.name)}">
+        ${p.github ? `<a class="pc-gh" href="${p.github}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open on GitHub">↗</a>` : ''}
         <div class="pc-header">
           <div class="pc-name">${escapeHtml(p.name)}</div>
           <div class="pc-status ${isActive ? 'in-progress' : 'complete'}">${isActive ? 'BUILDING' : 'SHIPPED'}</div>
@@ -345,10 +412,10 @@ function renderProjects(d) {
         <div class="pc-tagline">${escapeHtml(tagline)}</div>
         <div class="pc-progress"><div class="pc-progress-fill" style="width:${pct}%"></div></div>
         <div class="pc-stats">
-          <div class="pc-stat">⎇ <strong>${p.commit_count}</strong></div>
-          <div class="pc-stat add">+<strong>${fmt.num(p.additions)}</strong></div>
-          <div class="pc-stat del">−<strong>${fmt.num(p.deletions)}</strong></div>
-          <div class="pc-stat pct">${pct}%</div>
+          <div class="pc-stat" data-tip="${p.commit_count} commits">⎇ <strong>${p.commit_count}</strong></div>
+          <div class="pc-stat add" data-tip="lines added">+<strong>${fmt.num(p.additions)}</strong></div>
+          <div class="pc-stat del" data-tip="lines removed">−<strong>${fmt.num(p.deletions)}</strong></div>
+          <div class="pc-stat pct" data-tip="${ago}">${pct}%</div>
         </div>
       </div>
     `;
@@ -356,6 +423,7 @@ function renderProjects(d) {
   $$('.project-card', wrap).forEach(el => {
     el.addEventListener('click', () => openDrawer(el.dataset.name));
   });
+  attachTooltips(wrap);
 }
 
 function renderCommitFeed(d) {
@@ -471,7 +539,11 @@ function renderDrawer(p) {
 
 function renderDrawerTab(tab, p) {
   const body = $('#drawer-body');
-  if (tab === 'overview') body.innerHTML = drawerOverview(p);
+  body.scrollTop = 0;
+  if (tab === 'overview') {
+    body.innerHTML = drawerOverview(p);
+    renderProjectSparkline(p);
+  }
   else if (tab === 'commits') body.innerHTML = drawerCommits(p);
   else if (tab === 'files') body.innerHTML = drawerFiles(p);
   else if (tab === 'languages') body.innerHTML = drawerLangs(p);
@@ -479,7 +551,14 @@ function renderDrawerTab(tab, p) {
 
   if (tab === 'commits') {
     $$('.commit-row', body).forEach(el => {
-      el.addEventListener('click', () => openCommit(p.name, el.dataset.sha));
+      el.addEventListener('click', (e) => {
+        if (e.target.classList.contains('commit-sha')) {
+          copyToClipboard(el.dataset.sha);
+          showToast('success', `${el.dataset.sha.slice(0,12)} copied`);
+          return;
+        }
+        openCommit(p.name, el.dataset.sha);
+      });
     });
   }
   if (tab === 'files') {
@@ -487,6 +566,66 @@ function renderDrawerTab(tab, p) {
       el.addEventListener('click', () => openFile(p.name, el.dataset.path));
     });
   }
+}
+
+function renderProjectSparkline(p) {
+  const canvas = $('#dr-spark');
+  if (!canvas) return;
+  const today = new Date();
+  const days = 30;
+  const buckets = Array(days).fill(0);
+  const labels = [];
+  for (let i = 0; i < days; i++) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - (days - 1 - i));
+    labels.push(d.toISOString().slice(0, 10));
+  }
+  (p.commits || []).forEach(c => {
+    const d = new Date(c.timestamp * 1000).toISOString().slice(0, 10);
+    const idx = labels.indexOf(d);
+    if (idx >= 0) buckets[idx]++;
+  });
+  if (state.charts.spark) state.charts.spark.destroy();
+  const ctx = canvas.getContext('2d');
+  state.charts.spark = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: labels.map(l => fmt.date(l)),
+      datasets: [{
+        data: buckets,
+        backgroundColor: ctx => {
+          const v = ctx.raw || 0;
+          if (!v) return 'rgba(255,255,255,0.04)';
+          const grad = ctx.chart.ctx.createLinearGradient(0, 0, 0, 140);
+          grad.addColorStop(0, 'oklch(82% 0.18 220)');
+          grad.addColorStop(1, 'oklch(60% 0.20 270)');
+          return grad;
+        },
+        borderRadius: 3,
+        maxBarThickness: 14,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'oklch(15% 0.005 250)',
+          borderColor: 'oklch(28% 0.014 250)',
+          borderWidth: 1,
+          titleFont: { family: 'JetBrains Mono', size: 11 },
+          bodyFont: { family: 'JetBrains Mono', size: 11 },
+          padding: 8,
+          callbacks: { label: ctx => ` ${ctx.raw} commits` },
+        },
+      },
+      scales: {
+        x: { display: false },
+        y: { display: false, beginAtZero: true },
+      },
+    },
+  });
 }
 
 function drawerOverview(p) {
@@ -511,6 +650,16 @@ function drawerOverview(p) {
         <div class="dr-mini-label">Sessions</div>
         <div class="dr-mini-value">${p.session}</div>
       </div>
+    </div>
+
+    <div class="dr-chart-tile">
+      <div class="dr-chart-tile-header">
+        <div class="dr-section-title" style="margin-bottom:0">Commit Timeline</div>
+        <div style="font-family:var(--font-mono);font-size:10px;color:var(--text3)">
+          ${p.first_commit ? `${fmt.ago(p.first_commit)} → ${fmt.ago(p.last_commit)}` : 'no commits yet'}
+        </div>
+      </div>
+      <div class="dr-chart-wrap"><canvas id="dr-spark"></canvas></div>
     </div>
 
     <div class="dr-section">
@@ -675,24 +824,62 @@ function drawerReadme(p) {
 }
 
 function renderMarkdown(md) {
-  let html = escapeHtml(md);
-  html = html.replace(/```(\w+)?\n([\s\S]*?)```/g, (m, lang, code) => `<pre><code>${code}</code></pre>`);
-  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-  html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
-  html = html.replace(/^[-*] (.+)$/gm, '<li>$1</li>');
-  html = html.replace(/(<li>[\s\S]*?<\/li>(?:\n<li>[\s\S]*?<\/li>)*)/g, m => `<ul>${m.replace(/\n/g,'')}</ul>`);
-  html = html.split(/\n\n+/).map(para => {
-    if (para.match(/^<(h\d|ul|ol|pre|blockquote)/)) return para;
-    if (!para.trim()) return '';
-    return `<p>${para.replace(/\n/g, '<br>')}</p>`;
-  }).join('\n');
+  // Stash code blocks first so their contents aren't mangled
+  const blocks = [];
+  let text = md.replace(/```(\w+)?\n([\s\S]*?)```/g, (_, lang, code) => {
+    blocks.push(`<pre><code>${escapeHtml(code)}</code></pre>`);
+    return `\u0000BLOCK${blocks.length - 1}\u0000`;
+  });
+
+  // Process line-by-line for block grouping
+  const lines = text.split('\n');
+  const out = [];
+  let listType = null;
+  let listItems = [];
+  const flushList = () => {
+    if (listItems.length) {
+      out.push(`<${listType}>${listItems.join('')}</${listType}>`);
+      listItems = [];
+    }
+    listType = null;
+  };
+  for (let line of lines) {
+    const ulMatch = line.match(/^[-*]\s+(.+)/);
+    const olMatch = line.match(/^\d+\.\s+(.+)/);
+    if (ulMatch) {
+      if (listType !== 'ul') flushList();
+      listType = 'ul';
+      listItems.push(`<li>${inlineMd(ulMatch[1])}</li>`);
+      continue;
+    }
+    if (olMatch) {
+      if (listType !== 'ol') flushList();
+      listType = 'ol';
+      listItems.push(`<li>${inlineMd(olMatch[1])}</li>`);
+      continue;
+    }
+    flushList();
+    if (/^###\s+/.test(line)) { out.push(`<h3>${inlineMd(line.replace(/^###\s+/,''))}</h3>`); continue; }
+    if (/^##\s+/.test(line))  { out.push(`<h2>${inlineMd(line.replace(/^##\s+/,''))}</h2>`); continue; }
+    if (/^#\s+/.test(line))   { out.push(`<h1>${inlineMd(line.replace(/^#\s+/,''))}</h1>`); continue; }
+    if (/^>\s+/.test(line))   { out.push(`<blockquote>${inlineMd(line.replace(/^>\s+/,''))}</blockquote>`); continue; }
+    if (/^---+$/.test(line))  { out.push('<hr>'); continue; }
+    if (line.trim()) out.push(`<p>${inlineMd(line)}</p>`);
+    else out.push('');
+  }
+  flushList();
+  let html = out.join('\n');
+  html = html.replace(/\u0000BLOCK(\d+)\u0000/g, (_, i) => blocks[+i]);
   return html;
+}
+
+function inlineMd(s) {
+  let t = escapeHtml(s);
+  t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
+  t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  t = t.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>');
+  t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  return t;
 }
 
 // === Modal ===
@@ -799,13 +986,35 @@ function escapeAttr(s) { return escapeHtml(s); }
 
 function setupKeyboard() {
   document.addEventListener('keydown', (e) => {
+    const inInput = ['INPUT','TEXTAREA'].includes(document.activeElement.tagName);
+
     if (e.key === 'Escape') {
-      if ($('#modal-card').classList.contains('open')) closeModal();
-      else if ($('#drawer').classList.contains('open')) closeDrawer();
+      if ($('#palette').classList.contains('open')) { closePalette(); return; }
+      if ($('#modal-card').classList.contains('open')) { closeModal(); return; }
+      if ($('#drawer').classList.contains('open')) { closeDrawer(); return; }
     }
-    if (e.key === '/' && document.activeElement.tagName !== 'INPUT') {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
       e.preventDefault();
-      $('#search-input')?.focus();
+      openPalette();
+      return;
+    }
+    if (e.key === '/' && !inInput) {
+      e.preventDefault();
+      openPalette();
+      return;
+    }
+    // drawer tab nav with arrows when drawer is open and not in input
+    if ($('#drawer').classList.contains('open') && !inInput && !$('#palette').classList.contains('open')) {
+      const tabs = $$('.drawer-tab');
+      const idx = tabs.findIndex(t => t.classList.contains('active'));
+      if (e.key === 'ArrowRight' && idx < tabs.length - 1) { tabs[idx+1].click(); e.preventDefault(); }
+      if (e.key === 'ArrowLeft' && idx > 0) { tabs[idx-1].click(); e.preventDefault(); }
+    }
+    // palette nav
+    if ($('#palette').classList.contains('open')) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); movePalette(1); }
+      if (e.key === 'ArrowUp') { e.preventDefault(); movePalette(-1); }
+      if (e.key === 'Enter') { e.preventDefault(); selectPalette(); }
     }
   });
 }
@@ -813,17 +1022,179 @@ function setupKeyboard() {
 function setupSearch() {
   const input = $('#search-input');
   if (!input) return;
-  input.addEventListener('input', (e) => {
-    const q = e.target.value.toLowerCase();
-    $$('.project-card').forEach(card => {
-      const name = card.dataset.name.toLowerCase();
-      const text = card.textContent.toLowerCase();
-      card.style.display = (name.includes(q) || text.includes(q)) ? '' : 'none';
+  // turn the topbar search into a palette trigger
+  input.addEventListener('focus', () => {
+    input.blur();
+    openPalette();
+  });
+  $('#search-trigger').addEventListener('click', () => openPalette());
+}
+
+function setupFilters() {
+  $$('.filter-pill').forEach(el => {
+    el.addEventListener('click', () => {
+      $$('.filter-pill').forEach(p => p.classList.remove('active'));
+      el.classList.add('active');
+      state.filter = el.dataset.status;
+      if (state.data) renderProjects(state.data);
     });
+  });
+  const sel = $('#sort-select');
+  if (sel) sel.addEventListener('change', () => {
+    state.sort = sel.value;
+    if (state.data) renderProjects(state.data);
+  });
+}
+
+// === Live clock ===
+function startClock() {
+  const update = () => {
+    const el = $('#clock');
+    if (!el) return;
+    const d = new Date();
+    const day = d.toLocaleDateString(undefined, { weekday: 'short' });
+    const date = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    el.innerHTML = `<span class="tc-day">${day} ${date}</span><span class="tc-time">${time}</span>`;
+  };
+  update();
+  setInterval(update, 1000);
+}
+
+// === Toast ===
+function showToast(type, message, ms = 2400) {
+  const stack = $('#toast-stack');
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  const icon = { success: '✓', error: '!', info: 'i' }[type] || '·';
+  el.innerHTML = `<div class="toast-icon">${icon}</div><div>${escapeHtml(message)}</div>`;
+  stack.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  setTimeout(() => {
+    el.classList.remove('show');
+    setTimeout(() => el.remove(), 300);
+  }, ms);
+}
+
+async function copyToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// === Command palette ===
+function openPalette() {
+  $('#palette-scrim').classList.add('open');
+  $('#palette').classList.add('open');
+  $('#palette-input').value = '';
+  state.paletteSel = 0;
+  buildPalette('');
+  setTimeout(() => $('#palette-input').focus(), 50);
+}
+function closePalette() {
+  $('#palette-scrim').classList.remove('open');
+  $('#palette').classList.remove('open');
+}
+function setupPalette() {
+  const input = $('#palette-input');
+  input.addEventListener('input', (e) => {
+    state.paletteSel = 0;
+    buildPalette(e.target.value);
+  });
+}
+function buildPalette(q) {
+  if (!state.data) return;
+  q = q.toLowerCase().trim();
+  const items = [];
+  for (const p of state.data.projects || []) {
+    const score = q ? (p.name.toLowerCase().includes(q) ? 1 : (p.description||'').toLowerCase().includes(q) ? 0.5 : 0) : 1;
+    if (score > 0) {
+      items.push({
+        kind: 'project',
+        title: p.name,
+        sub: p.description || p.in_progress || '—',
+        action: () => { closePalette(); openDrawer(p.name); },
+      });
+    }
+  }
+  for (const c of state.data.recent_commits || []) {
+    const score = q ? (c.subject.toLowerCase().includes(q) ? 1 : 0) : (q ? 0 : 0.3);
+    if (score > 0) {
+      items.push({
+        kind: 'commit',
+        title: c.subject,
+        sub: `${c.project} · ${c.short} · ${fmt.ago(c.timestamp)}`,
+        action: () => { closePalette(); openCommit(c.project, c.sha); },
+      });
+    }
+  }
+  state.paletteItems = items.slice(0, 30);
+  renderPalette();
+}
+function renderPalette() {
+  const wrap = $('#palette-results');
+  if (!state.paletteItems.length) {
+    wrap.innerHTML = '<div class="palette-empty">No matches</div>';
+    return;
+  }
+  const icons = { project: '◉', commit: '⎇', file: '·' };
+  wrap.innerHTML = state.paletteItems.map((it, i) => `
+    <div class="palette-item ${i === state.paletteSel ? 'selected' : ''}" data-i="${i}">
+      <div class="palette-item-icon">${icons[it.kind] || '·'}</div>
+      <div class="palette-item-body">
+        <div class="palette-item-title">${escapeHtml(it.title)}</div>
+        <div class="palette-item-sub">${escapeHtml(it.sub)}</div>
+      </div>
+      <div class="palette-item-kind">${it.kind}</div>
+    </div>
+  `).join('');
+  $$('.palette-item', wrap).forEach(el => {
+    el.addEventListener('click', () => {
+      state.paletteSel = parseInt(el.dataset.i, 10);
+      selectPalette();
+    });
+    el.addEventListener('mouseenter', () => {
+      state.paletteSel = parseInt(el.dataset.i, 10);
+      $$('.palette-item').forEach(p => p.classList.remove('selected'));
+      el.classList.add('selected');
+    });
+  });
+}
+function movePalette(d) {
+  const n = state.paletteItems.length;
+  if (!n) return;
+  state.paletteSel = (state.paletteSel + d + n) % n;
+  renderPalette();
+  const sel = $('.palette-item.selected');
+  if (sel) sel.scrollIntoView({ block: 'nearest' });
+}
+function selectPalette() {
+  const it = state.paletteItems[state.paletteSel];
+  if (it) it.action();
+}
+
+// === Refresh time-ago strings without re-rendering everything ===
+function refreshTimes() {
+  if (state.data) renderCommitFeed(state.data);
+}
+
+// === Drawer scroll shadow ===
+function setupDrawerScroll() {
+  const body = $('#drawer-body');
+  if (!body) return;
+  body.addEventListener('scroll', () => {
+    const scrolled = body.scrollTop > 4;
+    $('#drawer .drawer-header')?.classList.toggle('scrolled', scrolled);
+    $('#drawer .drawer-tabs')?.classList.toggle('scrolled', scrolled);
   });
 }
 
 window.reconnect = reconnect;
 window.closeDrawer = closeDrawer;
 window.closeModal = closeModal;
+window.closePalette = closePalette;
 init();
+setupDrawerScroll();

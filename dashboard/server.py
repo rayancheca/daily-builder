@@ -210,11 +210,11 @@ def _count_lines(filepath):
 def _language_stats(files, project_dir):
     by_lang = defaultdict(lambda: {'files': 0, 'lines': 0, 'bytes': 0})
     for f in files:
-        if f['lang'] == 'Other':
+        if f['lang'] == 'Other' or _is_generated(f['path']):
             continue
         by_lang[f['lang']]['files'] += 1
         by_lang[f['lang']]['bytes'] += f['size']
-        if f['size'] < 1_000_000:
+        if f['size'] < 500_000:
             by_lang[f['lang']]['lines'] += _count_lines(os.path.join(project_dir, f['path']))
     return [
         {'lang': lang, 'color': LANG_COLORS.get(lang, '#888'), **stats}
@@ -417,19 +417,35 @@ def cross_stats(projects):
     total_dels = sum(p['deletions'] for p in projects)
     completed = sum(1 for p in projects if p['status'] == 'COMPLETE')
     lang_files = Counter()
+    lang_lines = Counter()
+    total_files = 0
+    total_lines = 0
     for p in projects:
-        files = _walk_files(os.path.join(PROJECTS_DIR, p['name']), max_files=600)
+        proj_dir = os.path.join(PROJECTS_DIR, p['name'])
+        files = _walk_files(proj_dir, max_files=800)
         for f in files:
-            if f['lang'] != 'Other':
-                lang_files[f['lang']] += 1
+            if f['lang'] == 'Other' or _is_generated(f['path']):
+                continue
+            lang_files[f['lang']] += 1
+            total_files += 1
+            if f['size'] < 500_000:
+                n = _count_lines(os.path.join(proj_dir, f['path']))
+                total_lines += n
+                lang_lines[f['lang']] += n
     return {
         'total_projects': len(projects),
         'completed_projects': completed,
         'total_commits': total_commits,
         'total_additions': total_adds,
         'total_deletions': total_dels,
+        'total_files': total_files,
+        'total_lines': total_lines,
         'languages': [
-            {'lang': l, 'count': n, 'color': LANG_COLORS.get(l, '#888')}
+            {
+                'lang': l, 'count': n,
+                'lines': lang_lines.get(l, 0),
+                'color': LANG_COLORS.get(l, '#888'),
+            }
             for l, n in lang_files.most_common(15)
         ],
     }
@@ -519,6 +535,9 @@ def get_overview():
                 p['status'] = 'COMPLETE'
     active = next((p for p in projects if p['status'] != 'COMPLETE'), None)
     cal = streak_calendar(projects, days=365)
+    velocity = commit_velocity(projects, days=30)
+    today_count = velocity[-1]['count'] if velocity else 0
+    week_count = sum(v['count'] for v in velocity[-7:]) if velocity else 0
     return {
         'projects': projects,
         'active': active,
@@ -527,9 +546,11 @@ def get_overview():
         'streak_calendar': cal,
         'streak': calc_streak(cal),
         'cross_stats': cross_stats(projects),
-        'velocity': commit_velocity(projects, days=30),
+        'velocity': velocity,
         'heatmap': hour_heatmap(projects),
-        'recent_commits': recent_commits_global(projects, limit=30),
+        'recent_commits': recent_commits_global(projects, limit=40),
+        'today_commits': today_count,
+        'week_commits': week_count,
         'last_updated': datetime.now().isoformat(),
     }
 

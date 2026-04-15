@@ -20,10 +20,11 @@
         </div>
       </div>
       <div class="topbar-actions">
-        <div class="search-bar">
+        <div class="topbar-clock" id="clock"></div>
+        <div class="search-bar" id="search-trigger">
           <span class="search-icon">⌕</span>
-          <input id="search-input" placeholder="Search projects, languages, commits..." />
-          <kbd>/</kbd>
+          <input id="search-input" placeholder="Search projects, commands..." />
+          <kbd>⌘K</kbd>
         </div>
         <div class="live-pill" id="live-pill">
           <div class="live-dot"></div>
@@ -32,6 +33,10 @@
         <button class="icon-btn" onclick="reconnect()" title="Reconnect">↻</button>
       </div>
     </nav>
+
+    <div class="ticker" id="ticker">
+      <div class="ticker-inner" id="ticker-inner"></div>
+    </div>
 
     <main>
       <section class="hero-row span-12">
@@ -116,6 +121,22 @@
           <div class="tile-title">All Projects</div>
           <div class="tile-sub" id="proj-count"></div>
         </div>
+        <div class="proj-controls">
+          <div class="filter-pills" id="status-filter">
+            <button class="filter-pill active" data-status="all">All</button>
+            <button class="filter-pill" data-status="building">Building</button>
+            <button class="filter-pill" data-status="shipped">Shipped</button>
+          </div>
+          <div class="sort-control">
+            <span class="sort-label">Sort</span>
+            <select id="sort-select">
+              <option value="recent">Most recent</option>
+              <option value="commits">Most commits</option>
+              <option value="lines">Most lines</option>
+              <option value="name">Alphabetical</option>
+            </select>
+          </div>
+        </div>
         <div class="project-grid" id="project-grid"></div>
       </section>
 
@@ -155,6 +176,23 @@
       </div>
       <div id="modal-body"></div>
     </div>
+
+    <div class="scrim" id="palette-scrim" onclick="closePalette()"></div>
+    <div class="palette" id="palette">
+      <div class="palette-header">
+        <span class="palette-icon">⌕</span>
+        <input id="palette-input" placeholder="Jump to project, file, or commit..." autocomplete="off" />
+        <kbd>esc</kbd>
+      </div>
+      <div class="palette-results" id="palette-results"></div>
+      <div class="palette-footer">
+        <span><kbd>↑↓</kbd> navigate</span>
+        <span><kbd>↵</kbd> open</span>
+        <span><kbd>esc</kbd> close</span>
+      </div>
+    </div>
+
+    <div class="toast-stack" id="toast-stack"></div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
