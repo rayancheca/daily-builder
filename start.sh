@@ -414,29 +414,32 @@ different idea — different algorithm, different tech stack, different user."
     fi
 
     RAW_LOG="$DEBUG_DIR/generate_attempt_${ATTEMPT}.log"
+    RAW_FILE="$DEBUG_DIR/generate_attempt_${ATTEMPT}.stdout"
     IDEA_RAW=$(claude --dangerously-skip-permissions -p "$FULL_PROMPT" 2>"$RAW_LOG")
+    printf '%s' "$IDEA_RAW" > "$RAW_FILE"
 
-    IDEA_JSON=$(echo "$IDEA_RAW" | PY - <<'PYEOF'
-import sys, json, re
-raw = sys.stdin.read()
+    IDEA_JSON=$(RAW_FILE="$RAW_FILE" PY <<'PYEOF'
+import json, os, re, sys
+raw = open(os.environ["RAW_FILE"]).read()
 match = re.search(r"\{.*\}", raw, re.DOTALL)
 if match:
     try:
         data = json.loads(match.group())
         print(json.dumps(data))
-    except Exception:
+    except Exception as exc:
         print("{}")
+        print(f"parse error: {exc}", file=sys.stderr)
 else:
     print("{}")
+    print("no JSON block found in raw output", file=sys.stderr)
 PYEOF
 )
 
     if [ "$IDEA_JSON" = "{}" ]; then
         LAST_FAILURE_REASON="generation"
         echo -e "  ${RED}✗${RESET} Idea generation failed (attempt $ATTEMPT)."
-        echo "$IDEA_RAW" > "$DEBUG_DIR/generate_attempt_${ATTEMPT}.stdout"
         echo -e "  ${DIM}  stderr: $RAW_LOG${RESET}"
-        echo -e "  ${DIM}  stdout: $DEBUG_DIR/generate_attempt_${ATTEMPT}.stdout${RESET}"
+        echo -e "  ${DIM}  stdout: $RAW_FILE${RESET}"
         if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
             break
         fi
@@ -445,14 +448,15 @@ PYEOF
         continue
     fi
 
-    DEDUPE_RESULT=$(echo "$IDEA_JSON" | PY - <<PYEOF
-import sys, json
-from pathlib import Path
+    IDEA_FILE="$DEBUG_DIR/idea_attempt_${ATTEMPT}.json"
+    printf '%s' "$IDEA_JSON" > "$IDEA_FILE"
+    DEDUPE_RESULT=$(IDEA_FILE="$IDEA_FILE" PY <<'PYEOF'
+import json, os
 from lib.dedupe import check
 from lib.paths import HISTORY_FILE, Config
 
 cfg = Config.load()
-idea = json.loads(sys.stdin.read())
+idea = json.loads(open(os.environ["IDEA_FILE"]).read())
 r = check(idea, HISTORY_FILE, cfg)
 print(f"{int(r.too_similar)}|{r.max_score:.3f}|{r.most_similar_name or ''}|{r.threshold:.2f}")
 PYEOF

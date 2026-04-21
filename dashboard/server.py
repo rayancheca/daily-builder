@@ -1216,6 +1216,14 @@ class ThreadedServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
+    def handle_error(self, request, client_address):
+        """Swallow benign client-disconnect errors that happen on every SSE close.
+        Anything else is still logged normally."""
+        exc_type = sys.exc_info()[0]
+        if exc_type in (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            return
+        super().handle_error(request, client_address)
+
 
 if __name__ == '__main__':
     print(f"Dashboard running at http://localhost:{PORT}")
