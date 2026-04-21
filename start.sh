@@ -233,6 +233,21 @@ PYEOF
         echo -e "  ${GREEN}▶${RESET} Resuming ${BOLD}$PROJECT_NAME${RESET}..."
         log "Resuming: $PROJECT_NAME"
         cd "$UNFINISHED"
+
+        RESUME_KICK="Read state.md and CLAUDE.md. Continue building from where the last session left off. Follow the Next steps section of state.md exactly. Work slowly, verify each step, and commit after every working feature."
+        if command -v pbcopy >/dev/null 2>&1; then
+            printf '%s' "$RESUME_KICK" | pbcopy
+            CLIP_NOTE="${GREEN}(copied to clipboard — paste with Cmd+V)${RESET}"
+        else
+            CLIP_NOTE="${DIM}(copy the block below)${RESET}"
+        fi
+
+        echo ""
+        echo -e "  ${CYAN}────────────────────────────────────────${RESET}"
+        echo ""
+        echo -e "  ${BOLD}Paste this as your first message${RESET} $CLIP_NOTE${BOLD}:${RESET}"
+        echo ""
+        echo -e "  ${DIM}${RESUME_KICK}${RESET}"
         echo ""
         echo -e "  ${CYAN}────────────────────────────────────────${RESET}"
         echo ""
@@ -640,7 +655,23 @@ else:
 PYEOF
 
 # ── Launch Claude Code ────────────────────────────────
+KICKOFF="Read CLAUDE.md and state.md carefully, then read ~/daily-builder/prompts/new_project.md starting at STEP 3. Build this project step by step following every instruction. Work slowly, verify each step before moving on, and commit after every working feature."
+
+# Copy to clipboard on macOS so the user can just paste.
+if command -v pbcopy >/dev/null 2>&1; then
+    printf '%s' "$KICKOFF" | pbcopy
+    CLIPBOARD_NOTE="${GREEN}(copied to clipboard — just paste with Cmd+V)${RESET}"
+else
+    CLIPBOARD_NOTE="${DIM}(copy the block below)${RESET}"
+fi
+
 echo -e "  ${GREEN}▶${RESET} Launching Claude Code..."
+echo ""
+echo -e "  ${CYAN}────────────────────────────────────────${RESET}"
+echo ""
+echo -e "  ${BOLD}Paste this as your first message${RESET} $CLIPBOARD_NOTE${BOLD}:${RESET}"
+echo ""
+echo -e "  ${DIM}${KICKOFF}${RESET}"
 echo ""
 echo -e "  ${CYAN}────────────────────────────────────────${RESET}"
 echo ""
