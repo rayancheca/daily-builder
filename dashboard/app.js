@@ -256,14 +256,14 @@ function renderCalendar(d) {
     el.addEventListener('click', () => openDayDetail(el.dataset.date));
   });
 
-  // Auto-scroll to recent days (the calendar container is horizontally scrollable
-  // and content fills left-to-right chronologically; without this, users land
-  // near January and have to scroll to see today).
+  // Auto-anchor the calendar to today. Scroll position survives SSE re-renders
+  // via CSS direction:rtl on the scroll container (see style.css). The JS here
+  // is a defensive fallback for browsers that don't honor the RTL anchor.
   const calWrap = wrap.closest('.calendar-wrap');
   if (calWrap) {
-    requestAnimationFrame(() => {
-      calWrap.scrollLeft = calWrap.scrollWidth;
-    });
+    const pin = () => { calWrap.scrollLeft = calWrap.scrollWidth; };
+    requestAnimationFrame(pin);
+    setTimeout(pin, 60);
   }
 
   // Month labels — one slot per week column (15px gap-aligned), label at first week of each month
@@ -287,51 +287,56 @@ function renderCalendar(d) {
 }
 
 function renderLangChart(d) {
-  const ctx = $('#chart-lang').getContext('2d');
-  const langs = (d.cross_stats.languages || []).slice(0, 10);
-  if (state.charts.lang) state.charts.lang.destroy();
-  if (!langs.length) return;
-  state.charts.lang = new Chart(ctx, {
-    type: 'doughnut',
-    data: {
-      labels: langs.map(l => l.lang),
-      datasets: [{
-        data: langs.map(l => l.count),
-        backgroundColor: langs.map(l => l.color),
-        borderColor: 'oklch(11% 0.008 250)',
-        borderWidth: 2,
-        hoverOffset: 10,
-      }],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      cutout: '68%',
-      plugins: {
-        legend: {
-          position: 'right',
-          labels: {
-            color: '#aaa',
-            font: { size: 11, family: 'JetBrains Mono' },
-            padding: 14,
-            boxWidth: 10,
-            boxHeight: 10,
-            usePointStyle: true,
-            pointStyle: 'rectRounded',
-          },
-        },
-        tooltip: {
-          backgroundColor: 'oklch(15% 0.005 250)',
-          borderColor: 'oklch(28% 0.014 250)',
-          borderWidth: 1,
-          titleFont: { family: 'JetBrains Mono', size: 11 },
-          bodyFont: { family: 'JetBrains Mono', size: 11 },
-          padding: 10,
-        },
-      },
-    },
-  });
-  $('#lang-summary').textContent = `${langs.length} langs`;
+  const host = document.querySelector('.chart-wrap canvas#chart-lang')?.parentElement;
+  if (!host) return;
+  const langs = (d.cross_stats.languages || [])
+    .filter(l => l.lines > 0)
+    .slice(0, 8);
+  if (state.charts.lang) { state.charts.lang.destroy(); state.charts.lang = null; }
+
+  // Swap the <canvas> for a custom SVG viz. Idempotent across re-renders.
+  host.innerHTML = '';
+  host.classList.add('lang-viz');
+
+  if (!langs.length) {
+    host.innerHTML = '<div class="empty-state">No languages detected.</div>';
+    $('#lang-summary').textContent = '';
+    return;
+  }
+
+  const totalLines = langs.reduce((s, l) => s + l.lines, 0);
+
+  // Stacked proportional bar (top) + ranked legend (below) with bar fills that
+  // animate on mount. All counts map to `lines` — bytes and file-counts lose
+  // signal when language density varies.
+  const segs = langs.map(l => {
+    const pct = (l.lines / totalLines) * 100;
+    return `<div class="lang-seg" style="flex:${Math.max(0.5, pct)};background:${l.color}"
+                 data-tip="${escapeHtml(l.lang)}: ${fmt.num(l.lines)} lines (${pct.toFixed(1)}%)"></div>`;
+  }).join('');
+
+  const rows = langs.map((l, i) => {
+    const pct = (l.lines / totalLines) * 100;
+    return `
+      <div class="lang-row" style="--i:${i};--lang-color:${l.color}">
+        <span class="lang-dot"></span>
+        <span class="lang-name">${escapeHtml(l.lang)}</span>
+        <span class="lang-bar"><span style="width:${pct}%"></span></span>
+        <span class="lang-count">${fmt.num(l.lines)}</span>
+        <span class="lang-pct">${pct.toFixed(0)}%</span>
+      </div>
+    `;
+  }).join('');
+
+  host.innerHTML = `
+    <div class="lang-stack" role="img" aria-label="Language breakdown by lines">
+      ${segs}
+    </div>
+    <div class="lang-list">${rows}</div>
+  `;
+
+  attachTooltips(host);
+  $('#lang-summary').textContent = `${langs.length} langs · ${fmt.num(totalLines)} lines`;
 }
 
 function renderVelocityChart(d) {
@@ -1255,6 +1260,37 @@ function refreshTimes() {
   if (state.data) renderCommitFeed(state.data);
 }
 
+// === Scroll-reveal animation for tiles ===
+// Adds .revealed class when a tile enters the viewport. One-shot per element.
+// Runs once at startup + after each render pass (idempotent via data-revealed).
+function setupScrollReveal() {
+  if (!('IntersectionObserver' in window)) {
+    // Older browsers: just mark everything revealed immediately.
+    $$('.tile, .stat-card').forEach(el => el.classList.add('revealed'));
+    return;
+  }
+  const io = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('revealed');
+        io.unobserve(entry.target);
+      }
+    }
+  }, { threshold: 0.08, rootMargin: '0px 0px -40px 0px' });
+
+  const observe = () => {
+    $$('.tile:not([data-reveal-observed]), .stat-card:not([data-reveal-observed])').forEach((el, i) => {
+      el.dataset.revealObserved = '1';
+      el.style.setProperty('--reveal-delay', `${Math.min(i * 40, 400)}ms`);
+      io.observe(el);
+    });
+  };
+  observe();
+  // Re-observe any new tiles that appear after a render pass.
+  const mo = new MutationObserver(() => observe());
+  mo.observe(document.body, { childList: true, subtree: true });
+}
+
 // === Drawer scroll shadow ===
 function setupDrawerScroll() {
   const body = $('#drawer-body');
@@ -1553,18 +1589,18 @@ function renderDayDetail(data) {
   const maxHour = Math.max(1, ...hourly);
 
   const hourBars = hourly.map((n, h) => `
-    <div class="day-hour" data-tip="${String(h).padStart(2, '0')}:00 — ${n} commits">
-      <div class="day-hour-bar" style="height:${Math.round((n / maxHour) * 100)}%"></div>
+    <div class="day-hour" style="--i:${h}" data-tip="${String(h).padStart(2, '0')}:00 — ${n} commits">
+      <div class="day-hour-bar" style="--h:${Math.round((n / maxHour) * 100)}%;--i:${h}"></div>
       <div class="day-hour-label">${h % 6 === 0 ? String(h).padStart(2, '0') : ''}</div>
     </div>
   `).join('');
 
-  const timelineItems = timeline.map(c => {
+  const timelineItems = timeline.map((c, i) => {
     const dt = new Date(c.timestamp * 1000);
     const hh = String(dt.getHours()).padStart(2, '0');
     const mm = String(dt.getMinutes()).padStart(2, '0');
     return `
-      <div class="timeline-item" data-sha="${c.sha}" data-proj="${escapeAttr(c.project)}">
+      <div class="timeline-item" style="--i:${i}" data-sha="${c.sha}" data-proj="${escapeAttr(c.project)}">
         <div class="timeline-time">${hh}:${mm}</div>
         <div class="timeline-dot"></div>
         <div class="timeline-content">
@@ -1660,11 +1696,11 @@ function renderStreakDetail(d) {
   const last60 = cal.slice(-60);
   const max = Math.max(1, ...last60.map(c => c.count));
 
-  const bars = last60.map(day => {
+  const bars = last60.map((day, i) => {
     const h = Math.round((day.count / max) * 100);
     return `
-      <div class="streak-col" data-tip="${day.date}: ${day.count} commits" data-date="${day.date}" data-count="${day.count}">
-        <div class="streak-col-bar" style="height:${h}%"></div>
+      <div class="streak-col" style="--i:${i}" data-tip="${day.date}: ${day.count} commits" data-date="${day.date}" data-count="${day.count}">
+        <div class="streak-col-bar" style="--h:${h}%"></div>
         <div class="streak-col-day">${day.date.slice(-2)}</div>
       </div>
     `;
@@ -1693,12 +1729,12 @@ function renderShippedDetail(d) {
   );
   openModalEmpty(`Shipped · ${shipped.length} project${shipped.length === 1 ? '' : 's'}`);
 
-  const rows = shipped.map(p => {
+  const rows = shipped.map((p, i) => {
     const ev = p.evaluation || {};
     const score = typeof ev.score === 'number' ? ev.score : null;
     const scoreCls = score == null ? '' : score >= 90 ? 'eval-great' : score >= 75 ? 'eval-good' : score >= 60 ? 'eval-ok' : 'eval-low';
     return `
-      <div class="shipped-row" data-name="${escapeAttr(p.name)}">
+      <div class="shipped-row" style="--i:${i}" data-name="${escapeAttr(p.name)}">
         <div class="shipped-name">
           ${escapeHtml(p.name)}
           ${score != null ? `<span class="shipped-eval ${scoreCls}">★ ${score}</span>` : ''}
@@ -1733,11 +1769,11 @@ function renderCommitsDetail(d) {
   openModalEmpty(`Commits · ${fmt.num(stats.total_commits || 0)} total`);
 
   const max = Math.max(1, ...velocity.map(v => v.count));
-  const bars = velocity.map(v => {
+  const bars = velocity.map((v, i) => {
     const h = Math.round((v.count / max) * 100);
     return `
-      <div class="velocity-col" data-tip="${v.date}: ${v.count} commits" data-date="${v.date}" data-count="${v.count}">
-        <div class="velocity-col-bar" style="height:${h}%"></div>
+      <div class="velocity-col" style="--i:${i}" data-tip="${v.date}: ${v.count} commits" data-date="${v.date}" data-count="${v.count}">
+        <div class="velocity-col-bar" style="--h:${h}%"></div>
       </div>
     `;
   }).join('');
@@ -1796,3 +1832,4 @@ window.addWishlistItem = addWishlistItem;
 window.openDayDetail = openDayDetail;
 init();
 setupDrawerScroll();
+setupScrollReveal();

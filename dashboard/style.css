@@ -2254,6 +2254,7 @@ main > section:nth-child(8), main > div:nth-child(8) { animation-delay: 0.40s; }
   border-radius: 2px 2px 0 0;
   transition: height 400ms var(--ease, ease);
   min-height: 1px;
+  height: 0;  /* animated via var(--h) in @keyframes stat-bar-grow */
 }
 .day-hour-label {
   font-size: 9px;
@@ -2543,4 +2544,255 @@ main > section:nth-child(8), main > div:nth-child(8) { animation-delay: 0.40s; }
   font-size: 16px;
   font-weight: 600;
   color: var(--text0);
+}
+
+/* ─── Ambient background — subtle drifting gradient orbs ─ */
+/* One element, pure CSS, gpu-only animations. Hidden for reduced-motion users. */
+body::before,
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  filter: blur(120px);
+  opacity: 0.28;
+}
+body::before {
+  background:
+    radial-gradient(circle at 18% 22%, oklch(70% 0.22 250 / 0.55), transparent 42%),
+    radial-gradient(circle at 82% 68%, oklch(74% 0.20 300 / 0.45), transparent 45%);
+  animation: drift-a 28s ease-in-out infinite alternate;
+}
+body::after {
+  background:
+    radial-gradient(circle at 75% 18%, oklch(78% 0.18 180 / 0.35), transparent 40%),
+    radial-gradient(circle at 20% 85%, oklch(72% 0.22 30 / 0.30), transparent 45%);
+  animation: drift-b 34s ease-in-out infinite alternate;
+}
+@keyframes drift-a {
+  0%   { transform: translate3d(0, 0, 0) scale(1); }
+  50%  { transform: translate3d(-20px, 30px, 0) scale(1.08); }
+  100% { transform: translate3d(30px, -20px, 0) scale(0.95); }
+}
+@keyframes drift-b {
+  0%   { transform: translate3d(0, 0, 0) scale(1); }
+  50%  { transform: translate3d(25px, -30px, 0) scale(1.1); }
+  100% { transform: translate3d(-30px, 20px, 0) scale(0.94); }
+}
+#app { position: relative; z-index: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  body::before,
+  body::after { animation: none; opacity: 0.18; }
+}
+
+/* ─── Calendar: anchor right edge via RTL trick ────────── */
+.calendar-wrap {
+  direction: rtl;
+  overflow-x: auto;
+  scroll-behavior: auto;  /* instant — user-scroll overrides this */
+}
+.calendar-wrap > * {
+  direction: ltr;  /* restore visual LTR inside the scroll container */
+}
+.calendar,
+.cal-month-labels {
+  /* Reverse the flow order so rightmost column (today) is laid out first,
+     which anchors the horizontal scroll position to "today" automatically. */
+  display: flex;
+  flex-direction: row-reverse;
+  justify-content: flex-start;
+}
+.cal-week {
+  order: 0;
+}
+
+/* ─── Scroll reveal ───────────────────────────────────── */
+.tile,
+.stat-card {
+  opacity: 0;
+  transform: translateY(12px);
+  transition:
+    opacity 500ms var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1)) var(--reveal-delay, 0ms),
+    transform 500ms var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1)) var(--reveal-delay, 0ms);
+}
+.tile.revealed,
+.stat-card.revealed {
+  opacity: 1;
+  transform: translateY(0);
+}
+@media (prefers-reduced-motion: reduce) {
+  .tile, .stat-card {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+  }
+}
+
+/* ─── Languages — custom viz ──────────────────────────── */
+.chart-wrap.lang-viz,
+.chart-wrap:has(> .lang-stack) {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 8px 2px;
+  height: auto;
+}
+.lang-stack {
+  display: flex;
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  gap: 2px;
+  padding: 1px;
+  background: var(--bg3);
+}
+.lang-seg {
+  transition: flex 500ms var(--ease, ease), filter 200ms ease;
+  min-width: 3px;
+  border-radius: 3px;
+  cursor: help;
+  animation: lang-seg-grow 700ms var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1)) both;
+}
+.lang-seg:hover { filter: brightness(1.2); }
+@keyframes lang-seg-grow {
+  from { flex-grow: 0; opacity: 0.3; }
+  to   { opacity: 1; }
+}
+.lang-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.lang-row {
+  display: grid;
+  grid-template-columns: 10px 1fr 70px 60px 32px;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 2px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0;
+  transform: translateX(-6px);
+  animation: lang-row-in 420ms var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1)) both;
+  animation-delay: calc(var(--i, 0) * 45ms + 120ms);
+}
+@keyframes lang-row-in {
+  to { opacity: 1; transform: translateX(0); }
+}
+.lang-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--lang-color, var(--cyan));
+  box-shadow: 0 0 8px color-mix(in oklch, var(--lang-color, var(--cyan)), transparent 60%);
+}
+.lang-name {
+  color: var(--text1);
+  font-weight: 500;
+}
+.lang-bar {
+  height: 4px;
+  background: var(--bg3);
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
+.lang-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--lang-color, var(--cyan));
+  box-shadow: 0 0 10px color-mix(in oklch, var(--lang-color, var(--cyan)), transparent 70%);
+  transform-origin: left;
+  animation: lang-bar-fill 700ms var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1)) both;
+  animation-delay: calc(var(--i, 0) * 45ms + 250ms);
+}
+@keyframes lang-bar-fill {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+.lang-count {
+  color: var(--text2);
+  text-align: right;
+}
+.lang-pct {
+  color: var(--text0);
+  font-weight: 600;
+  text-align: right;
+}
+
+/* ─── Streak/velocity stagger (for modals) ─────────────── */
+.streak-col,
+.velocity-col {
+  animation: stat-col-in 400ms var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1)) both;
+  animation-delay: calc(var(--i, 0) * 8ms + 100ms);
+}
+.streak-col-bar,
+.velocity-col-bar {
+  height: 0;
+  animation: stat-bar-grow 520ms var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1)) forwards;
+  animation-delay: calc(var(--i, 0) * 8ms + 180ms);
+}
+@keyframes stat-col-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes stat-bar-grow {
+  to { height: var(--h, 0%); }
+}
+
+/* Shipped rows stagger in */
+.shipped-row {
+  opacity: 0;
+  transform: translateY(8px);
+  animation: shipped-row-in 380ms var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1)) forwards;
+  animation-delay: calc(var(--i, 0) * 45ms + 80ms);
+}
+@keyframes shipped-row-in {
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Day-detail hour bars ripple in */
+.day-hour-bar {
+  animation: stat-bar-grow 520ms var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1)) both;
+  animation-delay: calc(var(--i, 0) * 15ms);
+}
+
+/* Timeline items fade up staggered */
+.timeline-item {
+  opacity: 0;
+  transform: translateY(6px);
+  animation: timeline-in 360ms var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1)) forwards;
+  animation-delay: calc(var(--i, 0) * 35ms + 50ms);
+}
+@keyframes timeline-in {
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Modal enter — subtle scale + fade */
+.modal-card.open {
+  animation: modal-in 280ms var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1));
+}
+@keyframes modal-in {
+  from { opacity: 0; transform: translate(-50%, -48%) scale(0.97); }
+  to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
+/* Project card hover lift — a bit more pronounced */
+.project-card {
+  transition:
+    transform 200ms var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1)),
+    border-color 200ms ease,
+    box-shadow 240ms ease;
+}
+.project-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 28px -12px rgba(0, 0, 0, 0.5);
+}
+
+/* Calendar day cells get a little wiggle on hover */
+.cal-day.has-data {
+  transition: transform 140ms cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 180ms ease;
 }
