@@ -30,6 +30,7 @@
           <div class="live-dot"></div>
           <span id="live-text">CONNECTING</span>
         </div>
+        <button class="icon-btn" onclick="openWishlist()" title="Wishlist">★</button>
         <button class="icon-btn" onclick="reconnect()" title="Reconnect">↻</button>
       </div>
     </nav>
@@ -60,6 +61,13 @@
           <div class="stat-label">Total Commits</div>
           <div class="stat-value" id="stat-commits">—</div>
           <div class="stat-delta"><span id="stat-additions">0</span> lines added</div>
+        </div>
+      </section>
+
+      <section class="tile span-4" id="quota-tile">
+        <div class="tile-header">
+          <div class="tile-title">Max Quota · 7d</div>
+          <div class="tile-sub">loading…</div>
         </div>
       </section>
 
@@ -126,6 +134,7 @@
             <button class="filter-pill active" data-status="all">All</button>
             <button class="filter-pill" data-status="building">Building</button>
             <button class="filter-pill" data-status="shipped">Shipped</button>
+            <button class="filter-pill" data-status="stalled">Stalled</button>
           </div>
           <div class="sort-control">
             <span class="sort-label">Sort</span>
@@ -193,6 +202,27 @@
     </div>
 
     <div class="toast-stack" id="toast-stack"></div>
+
+    <div class="scrim" id="wishlist-scrim" onclick="closeWishlist()"></div>
+    <aside class="wishlist-panel" id="wishlist-panel" role="dialog" aria-modal="true" aria-label="Project wishlist">
+      <div class="wishlist-header">
+        <div>
+          <div class="wishlist-title">Wishlist</div>
+          <div class="wishlist-sub">Ideas to build when the mood strikes</div>
+        </div>
+        <button class="icon-btn" onclick="closeWishlist()" aria-label="Close">✕</button>
+      </div>
+      <div class="wishlist-add">
+        <input id="wishlist-input"
+               placeholder="Add an idea — one line is fine"
+               onkeydown="if(event.key==='Enter') addWishlistItem()" />
+        <button class="wishlist-add-btn" onclick="addWishlistItem()">Add</button>
+      </div>
+      <div class="wishlist-body" id="wishlist-list"></div>
+      <div class="wishlist-footer">
+        Picks from this list when you run <code>start.sh → [w]ishlist</code>
+      </div>
+    </aside>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>

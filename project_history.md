@@ -22,3 +22,10 @@
 - Tech stack: Python, FastAPI, DuckDB, scikit-learn (IsolationForest), Drain, React, TypeScript, Vite, Tailwind v3, D3.js
 - Status: COMPLETE
 - GitHub: https://github.com/rayancheca/logflow-anomaly-engine
+
+2026-04-21 — circuit-trace
+- Domain: AI/ML Engineering & Applied Intelligence
+- Description: Mechanistic interpretability lab that dissects transformer attention heads and traces reasoning circuits in real time.
+- Tech stack: Python 3.11, PyTorch, HuggingFace transformers, FastAPI, WebSockets, Vite, React, TypeScript, Three.js (react-three-fiber), D3.js, Zustand, Tailwind CSS
+- Status: COMPLETE
+- GitHub: https://github.com/rayancheca/circuit-trace

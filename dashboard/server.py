@@ -1,4 +1,6 @@
 import http.server
+import shlex
+import shutil
 import socketserver
 import json
 import os
@@ -8,13 +10,32 @@ import sys
 import time
 from collections import defaultdict, Counter
 from datetime import datetime, timedelta
+from pathlib import Path
 from urllib.parse import urlparse, parse_qs
+
+# Make the daily-builder lib importable
+_DB_ROOT = os.path.expanduser("~/daily-builder")
+if _DB_ROOT not in sys.path:
+    sys.path.insert(0, _DB_ROOT)
+
+try:
+    from lib.paths import Config
+    from lib.project_state import get_state, get_progress, list_projects
+    from lib import telemetry as _telemetry
+    from lib import evaluate as _evaluate
+    _LIB_OK = True
+except ImportError as _lib_err:
+    _LIB_OK = False
+    print(f"[dashboard] lib import failed: {_lib_err}", file=sys.stderr)
 
 PORT = 8765
 DASHBOARD_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECTS_DIR = os.path.expanduser("~/dev/daily-projects")
+ARCHIVE_DIR = os.path.join(PROJECTS_DIR, "_archive")
 HISTORY_FILE = os.path.expanduser("~/daily-builder/project_history.md")
+WISHLIST_FILE = os.path.expanduser("~/daily-builder/wishlist.md")
 LOG_FILE = os.path.expanduser("~/daily-builder/session.log")
+START_SCRIPT = os.path.expanduser("~/daily-builder/start.sh")
 
 SKIP_DIRS = {
     '.git', '.venv', 'venv', 'env', 'node_modules', '__pycache__',
@@ -349,8 +370,36 @@ def project_summary(name):
     state_mtime = os.path.getmtime(state_path) if os.path.exists(state_path) else 0
     git_dir = os.path.join(project_dir, '.git')
     git_mtime = os.path.getmtime(git_dir) if os.path.isdir(git_dir) else 0
+
+    # Authoritative status and progress (git-derived, per lib/project_state.py).
+    auth_status = status
+    auth_reason = ''
+    progress_display = f"{len(log)} commits"
+    progress_completed = len(log)
+    progress_total = None
+    evaluation = _read_evaluation(project_dir)
+
+    if _LIB_OK:
+        try:
+            ps = get_state(Path(project_dir))
+            auth_status = ps.status
+            auth_reason = ps.reason
+            completed_n, total_n, disp = get_progress(Path(project_dir))
+            progress_completed = completed_n
+            progress_total = total_n
+            progress_display = disp
+        except Exception as exc:  # noqa: BLE001 — dashboard must not crash
+            _log(f"project_state failed for {name}: {exc}")
+
     return {
         'name': name, 'status': status,
+        'authoritative_status': auth_status,
+        'authoritative_reason': auth_reason,
+        'stalled': auth_status in ('stalled', 'dead'),
+        'progress_completed': progress_completed,
+        'progress_total': progress_total,
+        'progress_display': progress_display,
+        'evaluation': evaluation,
         'session': state['session'] if state else '1',
         'in_progress': state['in_progress'] if state else '',
         'completed': completed, 'next_steps': next_steps,
@@ -363,6 +412,25 @@ def project_summary(name):
         'github': _git_remote_url(project_dir),
         'branch': _git_branch(project_dir),
     }
+
+
+def _read_evaluation(project_dir):
+    """Read evaluation.json if present; return None otherwise."""
+    eval_path = os.path.join(project_dir, 'evaluation.json')
+    if not os.path.isfile(eval_path):
+        return None
+    try:
+        with open(eval_path) as f:
+            data = json.load(f)
+        return {
+            'score': data.get('score'),
+            'heuristic_score': (data.get('heuristic') or {}).get('score'),
+            'llm_score': (data.get('llm') or {}).get('score') if data.get('llm') else None,
+            'needs_finishing_pass': data.get('needs_finishing_pass', False),
+            'generated_at': data.get('generated_at'),
+        }
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 def all_projects():
@@ -656,13 +724,14 @@ def get_project_detail(name):
 
 
 def _watched_paths():
-    paths = [HISTORY_FILE, LOG_FILE]
+    paths = [HISTORY_FILE, LOG_FILE, WISHLIST_FILE]
     if os.path.isdir(PROJECTS_DIR):
         for name in os.listdir(PROJECTS_DIR):
             d = os.path.join(PROJECTS_DIR, name)
             if not os.path.isdir(d):
                 continue
             paths.append(os.path.join(d, 'state.md'))
+            paths.append(os.path.join(d, 'evaluation.json'))
             paths.append(os.path.join(d, '.git'))
             paths.append(os.path.join(d, '.git', 'HEAD'))
             paths.append(os.path.join(d, '.git', 'index'))
@@ -687,6 +756,241 @@ def fingerprint() -> str:
         except (FileNotFoundError, NotADirectoryError, PermissionError):
             parts.append(f"{p}:-")
     return "|".join(parts)
+
+
+# ── Wishlist helpers ─────────────────────────────────────────────
+
+_WISHLIST_UNUSED_RE = re.compile(
+    r"(##\s*Unused\s*\n)(.*?)(?=\n##|\Z)", re.DOTALL | re.IGNORECASE
+)
+_WISHLIST_USED_RE = re.compile(
+    r"(##\s*Used\s*\n)(.*?)(?=\n##|\Z)", re.DOTALL | re.IGNORECASE
+)
+
+
+def _read_wishlist():
+    if not os.path.isfile(WISHLIST_FILE):
+        return {'unused': [], 'used': []}
+    try:
+        content = Path(WISHLIST_FILE).read_text(encoding='utf-8')
+    except OSError:
+        return {'unused': [], 'used': []}
+
+    unused_match = _WISHLIST_UNUSED_RE.search(content)
+    used_match = _WISHLIST_USED_RE.search(content)
+
+    def _extract(block, pattern):
+        if not block:
+            return []
+        items = re.findall(pattern, block, re.MULTILINE)
+        return [i.strip() for i in items if i.strip() and 'add your own' not in i.lower()]
+
+    unused = _extract(
+        unused_match.group(2) if unused_match else '',
+        r'^- \[ \]\s+(.+)$',
+    )
+    used = _extract(
+        used_match.group(2) if used_match else '',
+        r'^- \[x\]\s+(.+)$',
+    )
+    return {'unused': unused, 'used': used}
+
+
+def _wishlist_add(item: str) -> None:
+    item = item.strip()
+    if not item:
+        return
+    if not os.path.isfile(WISHLIST_FILE):
+        Path(WISHLIST_FILE).write_text(
+            "# Project Wishlist\n\n## Unused\n\n- [ ] " + item + "\n\n## Used\n\n",
+            encoding='utf-8',
+        )
+        return
+    content = Path(WISHLIST_FILE).read_text(encoding='utf-8')
+    match = _WISHLIST_UNUSED_RE.search(content)
+    if not match:
+        content = content.rstrip() + "\n\n## Unused\n\n- [ ] " + item + "\n"
+    else:
+        block = match.group(2).rstrip('\n')
+        new_block = block + ("\n" if block else "") + "- [ ] " + item + "\n"
+        content = content[: match.start(2)] + new_block + content[match.end(2):]
+    Path(WISHLIST_FILE).write_text(content, encoding='utf-8')
+
+
+def _wishlist_remove(item: str) -> bool:
+    if not os.path.isfile(WISHLIST_FILE):
+        return False
+    content = Path(WISHLIST_FILE).read_text(encoding='utf-8')
+    match = _WISHLIST_UNUSED_RE.search(content)
+    if not match:
+        return False
+    block = match.group(2)
+    pattern = re.compile(r'^- \[ \]\s+' + re.escape(item) + r'\s*$', re.MULTILINE)
+    new_block, n = pattern.subn('', block)
+    if n == 0:
+        return False
+    new_block = re.sub(r'\n{3,}', '\n\n', new_block)
+    content = content[: match.start(2)] + new_block + content[match.end(2):]
+    Path(WISHLIST_FILE).write_text(content, encoding='utf-8')
+    return True
+
+
+# ── Quota telemetry ───────────────────────────────────────────────
+
+def _build_quota():
+    if not _LIB_OK:
+        return {'error': 'lib not available'}
+    try:
+        report = _telemetry.collect()
+        return report.to_dict()
+    except Exception as exc:  # noqa: BLE001
+        _log(f"quota collection failed: {exc}")
+        return {'error': str(exc)}
+
+
+# ── Evaluations aggregate ────────────────────────────────────────
+
+def _list_evaluations():
+    out = []
+    if not os.path.isdir(PROJECTS_DIR):
+        return out
+    for name in sorted(os.listdir(PROJECTS_DIR)):
+        project_dir = os.path.join(PROJECTS_DIR, name)
+        if not os.path.isdir(project_dir) or name.startswith('_'):
+            continue
+        ev = _read_evaluation(project_dir)
+        if ev:
+            out.append({'name': name, **ev})
+    return out
+
+
+# ── Day detail ──────────────────────────────────────────────────
+
+def _build_day_detail(date_str: str) -> dict:
+    """Return all commits across all projects for a given YYYY-MM-DD."""
+    try:
+        target = datetime.strptime(date_str, '%Y-%m-%d').date()
+    except (ValueError, TypeError):
+        return {'error': 'invalid date', 'date': date_str}
+
+    day_start = datetime.combine(target, datetime.min.time()).timestamp()
+    day_end = day_start + 86400
+
+    projects_data = []
+    totals = {'commits': 0, 'additions': 0, 'deletions': 0, 'files': 0}
+    all_commits = []
+
+    if os.path.isdir(PROJECTS_DIR):
+        for name in sorted(os.listdir(PROJECTS_DIR)):
+            proj_dir = os.path.join(PROJECTS_DIR, name)
+            if not os.path.isdir(proj_dir) or name.startswith('_'):
+                continue
+            log = _git_log_full(proj_dir, limit=500)
+            day_commits = [
+                c for c in log
+                if day_start <= c['timestamp'] < day_end
+            ]
+            if not day_commits:
+                continue
+            for c in day_commits:
+                c_copy = {**c, 'project': name}
+                all_commits.append(c_copy)
+            proj_add = sum(c['additions'] for c in day_commits)
+            proj_del = sum(c['deletions'] for c in day_commits)
+            proj_files = sum(c['files_changed'] for c in day_commits)
+            totals['commits'] += len(day_commits)
+            totals['additions'] += proj_add
+            totals['deletions'] += proj_del
+            totals['files'] += proj_files
+            projects_data.append({
+                'name': name,
+                'commit_count': len(day_commits),
+                'additions': proj_add,
+                'deletions': proj_del,
+                'files': proj_files,
+                'commits': day_commits,
+            })
+
+    all_commits.sort(key=lambda c: c['timestamp'])
+    hourly = [0] * 24
+    for c in all_commits:
+        dt = datetime.fromtimestamp(c['timestamp'])
+        hourly[dt.hour] += 1
+
+    return {
+        'date': date_str,
+        'totals': totals,
+        'projects': projects_data,
+        'timeline': all_commits,
+        'hourly': hourly,
+    }
+
+
+# ── Action handlers ──────────────────────────────────────────────
+
+def _action_resume(name: str):
+    """Spawn a visible Terminal.app window that runs start.sh --resume <name>."""
+    cmd = f"bash {shlex.quote(START_SCRIPT)} --resume {shlex.quote(name)}"
+    applescript = (
+        f'tell application "Terminal"\n'
+        f'  activate\n'
+        f'  do script "{cmd}"\n'
+        f'end tell'
+    )
+    try:
+        subprocess.Popen(
+            ['osascript', '-e', applescript],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return {'ok': True, 'action': 'resume', 'name': name}
+    except (FileNotFoundError, subprocess.SubprocessError) as exc:
+        return {'ok': False, 'error': str(exc)}
+
+
+def _action_polish(name: str):
+    cmd = f"bash {shlex.quote(START_SCRIPT)} --polish {shlex.quote(name)}"
+    applescript = (
+        f'tell application "Terminal"\n'
+        f'  activate\n'
+        f'  do script "{cmd}"\n'
+        f'end tell'
+    )
+    try:
+        subprocess.Popen(
+            ['osascript', '-e', applescript],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return {'ok': True, 'action': 'polish', 'name': name}
+    except (FileNotFoundError, subprocess.SubprocessError) as exc:
+        return {'ok': False, 'error': str(exc)}
+
+
+def _action_archive(name: str, project_dir: str):
+    os.makedirs(ARCHIVE_DIR, exist_ok=True)
+    target = os.path.join(ARCHIVE_DIR, name)
+    suffix = 1
+    while os.path.exists(target):
+        target = os.path.join(ARCHIVE_DIR, f"{name}-{suffix}")
+        suffix += 1
+    try:
+        shutil.move(project_dir, target)
+        return {'ok': True, 'action': 'archive', 'name': name, 'moved_to': target}
+    except OSError as exc:
+        return {'ok': False, 'error': str(exc)}
+
+
+def _action_evaluate(name: str, project_dir: str):
+    if not _LIB_OK:
+        return {'ok': False, 'error': 'lib not available'}
+    try:
+        result = _evaluate.evaluate(Path(project_dir))
+        _evaluate.record_in_history(name, result, Path(HISTORY_FILE))
+        return {'ok': True, 'action': 'evaluate', 'name': name, 'evaluation': result.to_dict()}
+    except Exception as exc:  # noqa: BLE001
+        _log(f"evaluate failed for {name}: {exc}")
+        return {'ok': False, 'error': str(exc)}
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -736,6 +1040,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if p == '/api/stream':
             self._serve_stream()
             return
+        if p == '/api/wishlist':
+            self._json(_read_wishlist())
+            return
+        if p == '/api/quota':
+            self._json(_build_quota())
+            return
+        if p == '/api/evaluations':
+            self._json(_list_evaluations())
+            return
+        if p == '/api/day':
+            date_str = q.get('date', [''])[0]
+            self._json(_build_day_detail(date_str))
+            return
         if p in ('/', '/index.html'):
             self._serve_file(os.path.join(DASHBOARD_DIR, 'index.html'), 'text/html')
             return
@@ -744,6 +1061,67 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
         if p == '/app.js':
             self._serve_file(os.path.join(DASHBOARD_DIR, 'app.js'), 'application/javascript')
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def _read_body(self):
+        length = int(self.headers.get('Content-Length', '0') or 0)
+        if length <= 0 or length > 1_000_000:
+            return {}
+        raw = self.rfile.read(length)
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+
+    def do_POST(self):
+        u = urlparse(self.path)
+        p = u.path
+        body = self._read_body()
+
+        if p == '/api/wishlist':
+            item = (body.get('item') or '').strip()
+            if not item:
+                self._json({'error': 'item required'}, status=400)
+                return
+            _wishlist_add(item)
+            self._json({'ok': True, 'item': item})
+            return
+
+        match = re.match(r'^/api/project/([^/]+)/(resume|archive|evaluate|polish)$', p)
+        if match:
+            name = match.group(1)
+            action = match.group(2)
+            project_dir = self._safe_project_dir(name)
+            if not project_dir:
+                self._json({'error': 'project not found'}, status=404)
+                return
+
+            if action == 'resume':
+                self._json(_action_resume(name))
+            elif action == 'archive':
+                self._json(_action_archive(name, project_dir))
+            elif action == 'evaluate':
+                self._json(_action_evaluate(name, project_dir))
+            elif action == 'polish':
+                self._json(_action_polish(name))
+            return
+
+        self.send_response(404)
+        self.end_headers()
+
+    def do_DELETE(self):
+        u = urlparse(self.path)
+        p = u.path
+        body = self._read_body()
+        if p == '/api/wishlist':
+            item = (body.get('item') or '').strip()
+            if not item:
+                self._json({'error': 'item required'}, status=400)
+                return
+            removed = _wishlist_remove(item)
+            self._json({'ok': True, 'removed': removed})
             return
         self.send_response(404)
         self.end_headers()

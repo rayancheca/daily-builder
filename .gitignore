@@ -1,6 +1,11 @@
 .DS_Store
 __pycache__/
 *.pyc
+*.egg-info/
 session.log
 build.log
 .claude/
+.debug/
+.pytest_cache/
+venv/
+/tmp/

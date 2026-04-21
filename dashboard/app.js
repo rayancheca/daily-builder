@@ -65,6 +65,18 @@ async function load() {
     console.error('load failed', e);
     setLive(false);
   }
+  loadQuota();
+}
+
+async function loadQuota() {
+  try {
+    const r = await fetch('/api/quota', { cache: 'no-store' });
+    if (!r.ok) return;
+    const q = await r.json();
+    renderQuota(q);
+  } catch (e) {
+    // non-fatal — telemetry is best-effort
+  }
 }
 
 let es = null;
@@ -192,6 +204,14 @@ function renderHero(d) {
   animateNumber('stat-commits', stats.total_commits);
   animateNumber('stat-additions', stats.total_additions);
   animateNumber('stat-streak', d.streak, n => n);
+
+  // Stat cards are clickable — each opens a contextual detail modal.
+  const streakCard = $('#stat-streak-card');
+  const shippedCard = $('#stat-shipped-card');
+  const commitsCard = $('#stat-commits-card');
+  if (streakCard) { streakCard.classList.add('clickable'); streakCard.onclick = () => openStatDetail('streak'); }
+  if (shippedCard) { shippedCard.classList.add('clickable'); shippedCard.onclick = () => openStatDetail('shipped'); }
+  if (commitsCard) { commitsCard.classList.add('clickable'); commitsCard.onclick = () => openStatDetail('commits'); }
 }
 
 function renderCalendar(d) {
@@ -226,10 +246,25 @@ function renderCalendar(d) {
   wrap.innerHTML = weeks.map(w => `
     <div class="cal-week">
       ${w.map(day => day
-        ? `<div class="cal-day ${lvl(day.count)}" data-tip="${day.date}: ${day.count} commits"></div>`
+        ? `<div class="cal-day ${lvl(day.count)} ${day.count ? 'has-data' : ''}" data-date="${day.date}" data-count="${day.count}" data-tip="${day.date}: ${day.count} commits${day.count ? ' — click for details' : ''}"></div>`
         : `<div class="cal-day" style="visibility:hidden"></div>`).join('')}
     </div>
   `).join('');
+
+  // Click handler: open day detail modal for any day with activity.
+  $$('.cal-day.has-data', wrap).forEach(el => {
+    el.addEventListener('click', () => openDayDetail(el.dataset.date));
+  });
+
+  // Auto-scroll to recent days (the calendar container is horizontally scrollable
+  // and content fills left-to-right chronologically; without this, users land
+  // near January and have to scroll to see today).
+  const calWrap = wrap.closest('.calendar-wrap');
+  if (calWrap) {
+    requestAnimationFrame(() => {
+      calWrap.scrollLeft = calWrap.scrollWidth;
+    });
+  }
 
   // Month labels — one slot per week column (15px gap-aligned), label at first week of each month
   const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -386,8 +421,9 @@ function renderHeatmap(d) {
 function renderProjects(d) {
   const wrap = $('#project-grid');
   let projects = [...(d.projects || [])];
-  if (state.filter === 'building') projects = projects.filter(p => p.status !== 'COMPLETE');
-  if (state.filter === 'shipped') projects = projects.filter(p => p.status === 'COMPLETE');
+  if (state.filter === 'building') projects = projects.filter(p => (p.authoritative_status || (p.status === 'COMPLETE' ? 'shipped' : 'building')) === 'building');
+  if (state.filter === 'shipped') projects = projects.filter(p => p.status === 'COMPLETE' || p.authoritative_status === 'shipped');
+  if (state.filter === 'stalled') projects = projects.filter(p => p.stalled);
   const sorters = {
     recent: (a, b) => (b.last_modified || 0) - (a.last_modified || 0),
     commits: (a, b) => b.commit_count - a.commit_count,
@@ -405,18 +441,31 @@ function renderProjects(d) {
   }
   wrap.innerHTML = projects.map(p => {
     const live = p.live_signal === 'recent_git';
-    const building = p.status !== 'COMPLETE';
+    const auth = p.authoritative_status || (p.status === 'COMPLETE' ? 'shipped' : 'building');
+    const stalled = Boolean(p.stalled);
+    const shipped = auth === 'shipped';
+    const building = !shipped && !stalled;
     const isActive = building || live;
-    const total = p.completed.length + p.next_steps.length;
-    const pct = total > 0 ? Math.round(100 * p.completed.length / total) : 0;
+
+    // Progress from server (git-derived, not state.md-derived).
+    const completed = typeof p.progress_completed === 'number' ? p.progress_completed : (p.completed || []).length;
+    const total = typeof p.progress_total === 'number' && p.progress_total > 0 ? p.progress_total : null;
+    const pct = total ? Math.min(100, Math.round(100 * completed / total)) : (shipped ? 100 : Math.min(100, completed * 5));
+    const progressText = p.progress_display || (total ? `${completed}/${total}` : `${completed} commits`);
+
     const tagline = p.description || p.in_progress || '—';
     const ago = p.last_commit ? fmt.ago(p.last_commit) : '—';
+
     let pill, pillClass;
     if (live) { pill = 'ACTIVE'; pillClass = 'in-progress live'; }
+    else if (stalled) { pill = 'STALLED'; pillClass = 'stalled'; }
     else if (building) { pill = 'BUILDING'; pillClass = 'in-progress'; }
     else { pill = 'SHIPPED'; pillClass = 'complete'; }
+
+    const evalChip = renderEvalChip(p.evaluation);
+
     return `
-      <div class="project-card ${isActive ? 'active' : ''} ${live ? 'live' : ''}" data-name="${escapeAttr(p.name)}">
+      <div class="project-card ${isActive ? 'active' : ''} ${live ? 'live' : ''} ${stalled ? 'stalled' : ''}" data-name="${escapeAttr(p.name)}">
         ${p.github ? `<a class="pc-gh" href="${p.github}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open on GitHub">↗</a>` : ''}
         <div class="pc-header">
           <div class="pc-name">${escapeHtml(p.name)}</div>
@@ -425,10 +474,11 @@ function renderProjects(d) {
         <div class="pc-tagline">${escapeHtml(tagline)}</div>
         <div class="pc-progress"><div class="pc-progress-fill" style="width:${pct}%"></div></div>
         <div class="pc-stats">
-          <div class="pc-stat" data-tip="${p.commit_count} commits">⎇ <strong>${p.commit_count}</strong></div>
+          <div class="pc-stat" data-tip="${progressText}">⎇ <strong>${completed}</strong>${total ? `<span class="pc-stat-sub">/${total}</span>` : ''}</div>
           <div class="pc-stat add" data-tip="lines added">+<strong>${fmt.num(p.additions)}</strong></div>
           <div class="pc-stat del" data-tip="lines removed">−<strong>${fmt.num(p.deletions)}</strong></div>
-          <div class="pc-stat pct" data-tip="${ago}">${pct}%</div>
+          ${evalChip}
+          <div class="pc-stat pct" data-tip="${ago}">${ago}</div>
         </div>
       </div>
     `;
@@ -531,10 +581,21 @@ function renderDrawer(p) {
     &nbsp;·&nbsp; on ${p.branch || 'main'}
   `;
 
+  const shipped = p.status === 'COMPLETE' || p.authoritative_status === 'shipped';
   $('#drawer-actions').innerHTML = `
+    <button class="action-btn resume" data-action="resume" data-name="${escapeAttr(p.name)}" title="Open Terminal and resume this project">▶ Resume</button>
+    <button class="action-btn polish" data-action="polish" data-name="${escapeAttr(p.name)}" title="Run finishing pass — README, polish, tests">◆ Polish</button>
+    <button class="action-btn evaluate" data-action="evaluate" data-name="${escapeAttr(p.name)}" title="Run evaluator now">✓ Evaluate</button>
+    <button class="action-btn archive" data-action="archive" data-name="${escapeAttr(p.name)}" title="Move to _archive/ (reversible)">⊘ Archive</button>
     ${p.github ? `<a class="icon-btn" href="${p.github}" target="_blank" rel="noopener" title="Open on GitHub">↗</a>` : ''}
     <button class="icon-btn" onclick="closeDrawer()" title="Close (Esc)">✕</button>
   `;
+  $$('#drawer-actions .action-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      handleProjectAction(btn.dataset.action, btn.dataset.name, btn);
+    });
+  });
 
   const tabs = ['overview', 'commits', 'files', 'languages', 'readme'];
   $('#drawer-tabs').innerHTML = tabs.map((t, i) =>
@@ -1205,9 +1266,533 @@ function setupDrawerScroll() {
   });
 }
 
+// === Evaluation chip ===
+function renderEvalChip(ev) {
+  if (!ev || typeof ev.score !== 'number') return '';
+  const score = ev.score;
+  let cls = 'eval-low';
+  if (score >= 90) cls = 'eval-great';
+  else if (score >= 75) cls = 'eval-good';
+  else if (score >= 60) cls = 'eval-ok';
+  return `<div class="pc-stat eval ${cls}" data-tip="Evaluation score (heuristic: ${ev.heuristic_score ?? '—'}${ev.llm_score != null ? `, LLM: ${ev.llm_score}` : ''})">★ <strong>${score}</strong></div>`;
+}
+
+// === Project action buttons ===
+async function handleProjectAction(action, name, btn) {
+  if (!action || !name) return;
+
+  if (action === 'archive') {
+    if (!confirm(`Archive "${name}"? It will be moved to _archive/ (reversible).`)) return;
+  }
+
+  const originalText = btn ? btn.innerHTML : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '…';
+  }
+
+  try {
+    const r = await fetch(`/api/project/${encodeURIComponent(name)}/${action}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    const data = await r.json();
+    if (!r.ok || data.ok === false) {
+      throw new Error(data.error || `${action} failed`);
+    }
+    toast(`${actionLabel(action)} — ${name}`, 'success');
+    if (action === 'evaluate' && data.evaluation) {
+      toast(`Score: ${data.evaluation.score}/100`, 'info');
+    }
+    if (action === 'archive') {
+      closeDrawer();
+      load();
+    }
+  } catch (err) {
+    toast(`Failed: ${err.message || action}`, 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = originalText;
+    }
+  }
+}
+
+function actionLabel(action) {
+  return ({ resume: 'Terminal opened', polish: 'Polish session opened', evaluate: 'Evaluated', archive: 'Archived' })[action] || action;
+}
+
+// === Toast helper ===
+function toast(message, kind = 'info') {
+  const stack = $('#toast-stack');
+  if (!stack) return;
+  const el = document.createElement('div');
+  el.className = `toast toast-${kind}`;
+  el.textContent = message;
+  stack.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  setTimeout(() => {
+    el.classList.remove('show');
+    setTimeout(() => el.remove(), 200);
+  }, 3500);
+}
+
+// === Token Usage tile ===
+// Pure information, no quota / ceiling concept. The user has Max — there's no
+// billing. This tile shows what the Claude Code transcripts say you've used.
+function renderQuota(q) {
+  const el = $('#quota-tile');
+  if (!el) return;
+  if (q.error) {
+    el.innerHTML = `<div class="tile-header"><div class="tile-title">Token Usage</div></div><div class="quota-empty">unavailable</div>`;
+    return;
+  }
+  const weekly = q.weekly || {};
+  const all = q.all_time || {};
+
+  const weeklyTotal = weekly.total_tokens || 0;
+  const weeklyMsgs = weekly.messages || 0;
+
+  // Per-project top 3 for the week
+  const perProj = Object.entries(q.per_project || {})
+    .filter(([_, v]) => (v.total_tokens || 0) > 0)
+    .sort((a, b) => (b[1].total_tokens || 0) - (a[1].total_tokens || 0))
+    .slice(0, 5);
+
+  // Stacked bar: proportions of input/output/cache-write/cache-read
+  const segments = [
+    { key: 'input',      val: weekly.input_tokens || 0,          color: 'var(--cyan)',   label: 'Input' },
+    { key: 'output',     val: weekly.output_tokens || 0,         color: 'var(--green)',  label: 'Output' },
+    { key: 'cache_w',    val: weekly.cache_creation_tokens || 0, color: 'var(--amber)',  label: 'Cache write' },
+    { key: 'cache_r',    val: weekly.cache_read_tokens || 0,     color: 'var(--purple)', label: 'Cache read' },
+  ];
+  const segTotal = segments.reduce((s, x) => s + x.val, 0) || 1;
+
+  el.innerHTML = `
+    <div class="tile-header">
+      <div class="tile-title">Token Usage · 7d</div>
+      <div class="tile-sub">${fmt.num(weeklyMsgs)} messages across ${Object.keys(q.per_project || {}).length} projects</div>
+    </div>
+    <div class="usage-body">
+      <div class="usage-big">
+        <div class="usage-big-num">${fmt.num(weeklyTotal)}</div>
+        <div class="usage-big-label">tokens this week</div>
+      </div>
+      <div class="usage-bar" role="img" aria-label="Token breakdown">
+        ${segments.map(s => `
+          <div class="usage-bar-seg"
+               style="flex:${Math.max(0.001, s.val/segTotal)};background:${s.color}"
+               data-tip="${s.label}: ${fmt.num(s.val)} (${Math.round(s.val/segTotal*100)}%)"></div>
+        `).join('')}
+      </div>
+      <div class="usage-legend">
+        ${segments.map(s => `
+          <div class="usage-legend-item">
+            <span class="usage-dot" style="background:${s.color}"></span>
+            <span class="usage-legend-label">${s.label}</span>
+            <span class="usage-legend-val">${fmt.num(s.val)}</span>
+          </div>
+        `).join('')}
+      </div>
+      ${perProj.length ? `
+        <div class="usage-projects">
+          <div class="usage-projects-title">Top projects · 7d</div>
+          ${perProj.map(([name, v]) => {
+            const pct = Math.round((v.total_tokens || 0) / weeklyTotal * 100);
+            return `
+              <div class="usage-project-row" data-name="${escapeAttr(name)}">
+                <span class="usage-project-name">${escapeHtml(name)}</span>
+                <span class="usage-project-bar"><span style="width:${pct}%"></span></span>
+                <span class="usage-project-pct">${pct}%</span>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      ` : ''}
+      <div class="usage-footer">
+        <span>All-time: ${fmt.num(all.total_tokens || 0)}</span>
+        <span class="usage-footer-dot">·</span>
+        <span>${fmt.num(all.messages || 0)} msgs</span>
+      </div>
+    </div>
+  `;
+
+  // Per-project row click → open project drawer
+  $$('.usage-project-row', el).forEach(row => {
+    row.style.cursor = 'pointer';
+    row.addEventListener('click', () => openDrawer(row.dataset.name));
+  });
+  attachTooltips(el);
+}
+
+// === Wishlist panel ===
+async function openWishlist() {
+  $('#wishlist-scrim')?.classList.add('open');
+  $('#wishlist-panel')?.classList.add('open');
+  await refreshWishlist();
+}
+
+function closeWishlist() {
+  $('#wishlist-scrim')?.classList.remove('open');
+  $('#wishlist-panel')?.classList.remove('open');
+}
+
+async function refreshWishlist() {
+  const list = $('#wishlist-list');
+  if (!list) return;
+  list.innerHTML = '<div class="wishlist-empty">loading…</div>';
+  try {
+    const r = await fetch('/api/wishlist', { cache: 'no-store' });
+    const data = await r.json();
+    renderWishlistItems(data);
+  } catch {
+    list.innerHTML = '<div class="wishlist-empty">failed to load</div>';
+  }
+}
+
+function renderWishlistItems(data) {
+  const list = $('#wishlist-list');
+  if (!list) return;
+  const unused = data.unused || [];
+  const used = data.used || [];
+
+  if (!unused.length && !used.length) {
+    list.innerHTML = '<div class="wishlist-empty">No ideas yet. Add one above.</div>';
+    return;
+  }
+
+  const unusedHtml = unused.map(item => `
+    <div class="wishlist-item">
+      <span class="wishlist-item-text">${escapeHtml(item)}</span>
+      <button class="wishlist-remove" data-item="${escapeAttr(item)}" title="Remove">×</button>
+    </div>
+  `).join('');
+
+  const usedHtml = used.map(item => `
+    <div class="wishlist-item used">
+      <span class="wishlist-item-text">${escapeHtml(item)}</span>
+    </div>
+  `).join('');
+
+  list.innerHTML = `
+    <div class="wishlist-section">
+      <div class="wishlist-section-title">Unused · ${unused.length}</div>
+      ${unusedHtml || '<div class="wishlist-empty">none</div>'}
+    </div>
+    ${used.length ? `
+      <div class="wishlist-section">
+        <div class="wishlist-section-title">Used · ${used.length}</div>
+        ${usedHtml}
+      </div>
+    ` : ''}
+  `;
+
+  $$('.wishlist-remove', list).forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const item = btn.dataset.item;
+      btn.disabled = true;
+      try {
+        await fetch('/api/wishlist', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ item }),
+        });
+        refreshWishlist();
+      } catch {
+        btn.disabled = false;
+        toast('Failed to remove', 'error');
+      }
+    });
+  });
+}
+
+async function addWishlistItem() {
+  const input = $('#wishlist-input');
+  if (!input) return;
+  const item = input.value.trim();
+  if (!item) return;
+  input.disabled = true;
+  try {
+    await fetch('/api/wishlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item }),
+    });
+    input.value = '';
+    refreshWishlist();
+  } catch {
+    toast('Failed to add', 'error');
+  } finally {
+    input.disabled = false;
+    input.focus();
+  }
+}
+
+// === Day detail ===
+async function openDayDetail(dateStr) {
+  if (!dateStr) return;
+  openModalEmpty(`Activity · ${dateStr}`);
+  try {
+    const r = await fetch(`/api/day?date=${encodeURIComponent(dateStr)}`, { cache: 'no-store' });
+    const data = await r.json();
+    if (data.error || !data.projects || !data.projects.length) {
+      $('#modal-body').innerHTML = `<div class="empty-state">No commits on ${escapeHtml(dateStr)}.</div>`;
+      return;
+    }
+    renderDayDetail(data);
+  } catch {
+    $('#modal-body').innerHTML = '<div class="empty-state err">Failed to load day detail.</div>';
+  }
+}
+
+function renderDayDetail(data) {
+  const t = data.totals || {};
+  const timeline = data.timeline || [];
+  const hourly = data.hourly || [];
+  const maxHour = Math.max(1, ...hourly);
+
+  const hourBars = hourly.map((n, h) => `
+    <div class="day-hour" data-tip="${String(h).padStart(2, '0')}:00 — ${n} commits">
+      <div class="day-hour-bar" style="height:${Math.round((n / maxHour) * 100)}%"></div>
+      <div class="day-hour-label">${h % 6 === 0 ? String(h).padStart(2, '0') : ''}</div>
+    </div>
+  `).join('');
+
+  const timelineItems = timeline.map(c => {
+    const dt = new Date(c.timestamp * 1000);
+    const hh = String(dt.getHours()).padStart(2, '0');
+    const mm = String(dt.getMinutes()).padStart(2, '0');
+    return `
+      <div class="timeline-item" data-sha="${c.sha}" data-proj="${escapeAttr(c.project)}">
+        <div class="timeline-time">${hh}:${mm}</div>
+        <div class="timeline-dot"></div>
+        <div class="timeline-content">
+          <div class="timeline-subject">${escapeHtml(c.subject)}</div>
+          <div class="timeline-meta">
+            <span class="timeline-proj">${escapeHtml(c.project)}</span>
+            <span class="timeline-stat add">+${fmt.num(c.additions)}</span>
+            <span class="timeline-stat del">−${fmt.num(c.deletions)}</span>
+            <span class="timeline-files">${c.files_changed} file${c.files_changed === 1 ? '' : 's'}</span>
+            <span class="timeline-sha">${c.short}</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  const projectRows = (data.projects || []).map(p => `
+    <div class="day-proj-row" data-name="${escapeAttr(p.name)}">
+      <span class="day-proj-name">${escapeHtml(p.name)}</span>
+      <span class="day-proj-commits">${p.commit_count} commits</span>
+      <span class="day-proj-stat add">+${fmt.num(p.additions)}</span>
+      <span class="day-proj-stat del">−${fmt.num(p.deletions)}</span>
+    </div>
+  `).join('');
+
+  $('#modal-body').innerHTML = `
+    <div class="day-summary">
+      <div class="day-summary-item">
+        <div class="day-summary-num">${t.commits || 0}</div>
+        <div class="day-summary-label">commits</div>
+      </div>
+      <div class="day-summary-item">
+        <div class="day-summary-num add">+${fmt.num(t.additions || 0)}</div>
+        <div class="day-summary-label">additions</div>
+      </div>
+      <div class="day-summary-item">
+        <div class="day-summary-num del">−${fmt.num(t.deletions || 0)}</div>
+        <div class="day-summary-label">deletions</div>
+      </div>
+      <div class="day-summary-item">
+        <div class="day-summary-num">${t.files || 0}</div>
+        <div class="day-summary-label">files touched</div>
+      </div>
+    </div>
+
+    <div class="day-section-title">By hour</div>
+    <div class="day-hours">${hourBars}</div>
+
+    <div class="day-section-title">Timeline · ${timeline.length} commits</div>
+    <div class="day-timeline">${timelineItems}</div>
+
+    <div class="day-section-title">Projects</div>
+    <div class="day-projects">${projectRows}</div>
+  `;
+
+  // Click a timeline commit → open commit diff viewer (reuses existing /api/commit)
+  $$('.timeline-item', $('#modal-body')).forEach(row => {
+    row.addEventListener('click', () => {
+      const sha = row.dataset.sha;
+      const proj = row.dataset.proj;
+      if (sha && proj) openCommitDiff(proj, sha);
+    });
+  });
+  $$('.day-proj-row', $('#modal-body')).forEach(row => {
+    row.addEventListener('click', () => openDrawer(row.dataset.name));
+  });
+  attachTooltips($('#modal-body'));
+}
+
+async function openCommitDiff(proj, sha) {
+  try {
+    const r = await fetch(`/api/commit?proj=${encodeURIComponent(proj)}&sha=${encodeURIComponent(sha)}`);
+    if (!r.ok) return;
+    const data = await r.json();
+    if (!data || !data.diff) return;
+    openModalEmpty(`${proj} · ${sha.substring(0, 7)}`);
+    $('#modal-body').innerHTML = `<pre class="commit-diff">${escapeHtml(data.diff)}</pre>`;
+  } catch {}
+}
+
+// === Stat card drill-downs ===
+function openStatDetail(which) {
+  const d = state.data;
+  if (!d) return;
+  if (which === 'streak') return renderStreakDetail(d);
+  if (which === 'shipped') return renderShippedDetail(d);
+  if (which === 'commits') return renderCommitsDetail(d);
+}
+
+function renderStreakDetail(d) {
+  openModalEmpty(`Streak · ${d.streak} day${d.streak === 1 ? '' : 's'}`);
+  const cal = d.streak_calendar || [];
+  const last60 = cal.slice(-60);
+  const max = Math.max(1, ...last60.map(c => c.count));
+
+  const bars = last60.map(day => {
+    const h = Math.round((day.count / max) * 100);
+    return `
+      <div class="streak-col" data-tip="${day.date}: ${day.count} commits" data-date="${day.date}" data-count="${day.count}">
+        <div class="streak-col-bar" style="height:${h}%"></div>
+        <div class="streak-col-day">${day.date.slice(-2)}</div>
+      </div>
+    `;
+  }).join('');
+
+  $('#modal-body').innerHTML = `
+    <div class="stat-detail-intro">
+      You've committed on ${d.streak} day${d.streak === 1 ? '' : 's'} in a row.
+      Last 60 days below — click any bar to see that day's activity.
+    </div>
+    <div class="streak-chart">${bars}</div>
+  `;
+
+  $$('.streak-col', $('#modal-body')).forEach(col => {
+    if (Number(col.dataset.count) > 0) {
+      col.style.cursor = 'pointer';
+      col.addEventListener('click', () => openDayDetail(col.dataset.date));
+    }
+  });
+  attachTooltips($('#modal-body'));
+}
+
+function renderShippedDetail(d) {
+  const shipped = (d.projects || []).filter(p =>
+    p.status === 'COMPLETE' || p.authoritative_status === 'shipped'
+  );
+  openModalEmpty(`Shipped · ${shipped.length} project${shipped.length === 1 ? '' : 's'}`);
+
+  const rows = shipped.map(p => {
+    const ev = p.evaluation || {};
+    const score = typeof ev.score === 'number' ? ev.score : null;
+    const scoreCls = score == null ? '' : score >= 90 ? 'eval-great' : score >= 75 ? 'eval-good' : score >= 60 ? 'eval-ok' : 'eval-low';
+    return `
+      <div class="shipped-row" data-name="${escapeAttr(p.name)}">
+        <div class="shipped-name">
+          ${escapeHtml(p.name)}
+          ${score != null ? `<span class="shipped-eval ${scoreCls}">★ ${score}</span>` : ''}
+        </div>
+        <div class="shipped-desc">${escapeHtml(p.description || p.in_progress || '—')}</div>
+        <div class="shipped-meta">
+          <span>⎇ ${p.commit_count}</span>
+          <span class="add">+${fmt.num(p.additions)}</span>
+          <span class="del">−${fmt.num(p.deletions)}</span>
+          ${p.github ? `<a href="${p.github}" target="_blank" rel="noopener" onclick="event.stopPropagation()">GitHub ↗</a>` : ''}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  $('#modal-body').innerHTML = `
+    <div class="stat-detail-intro">Every project that reached COMPLETE. Click any row to open details.</div>
+    <div class="shipped-list">${rows || '<div class="empty-state">No shipped projects yet.</div>'}</div>
+  `;
+
+  $$('.shipped-row', $('#modal-body')).forEach(r => {
+    r.addEventListener('click', () => {
+      closeModal();
+      openDrawer(r.dataset.name);
+    });
+  });
+}
+
+function renderCommitsDetail(d) {
+  const velocity = d.velocity || [];
+  const stats = d.cross_stats || {};
+  openModalEmpty(`Commits · ${fmt.num(stats.total_commits || 0)} total`);
+
+  const max = Math.max(1, ...velocity.map(v => v.count));
+  const bars = velocity.map(v => {
+    const h = Math.round((v.count / max) * 100);
+    return `
+      <div class="velocity-col" data-tip="${v.date}: ${v.count} commits" data-date="${v.date}" data-count="${v.count}">
+        <div class="velocity-col-bar" style="height:${h}%"></div>
+      </div>
+    `;
+  }).join('');
+
+  const recent = (d.recent_commits || []).slice(0, 30).map(c => {
+    const dt = new Date(c.timestamp * 1000);
+    const ago = fmt.ago(c.timestamp);
+    return `
+      <div class="recent-commit" data-sha="${c.sha}" data-proj="${escapeAttr(c.project)}">
+        <div class="recent-commit-subject">${escapeHtml(c.subject)}</div>
+        <div class="recent-commit-meta">
+          <span>${escapeHtml(c.project)}</span>
+          <span>${ago}</span>
+          <span class="add">+${fmt.num(c.additions)}</span>
+          <span class="del">−${fmt.num(c.deletions)}</span>
+          <span class="recent-commit-sha">${c.short}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  $('#modal-body').innerHTML = `
+    <div class="stat-detail-intro">Last 30 days of commit velocity. Click any bar for that day's details.</div>
+    <div class="velocity-chart">${bars}</div>
+    <div class="day-section-title">Recent commits</div>
+    <div class="recent-commits">${recent}</div>
+  `;
+
+  $$('.velocity-col', $('#modal-body')).forEach(col => {
+    if (Number(col.dataset.count) > 0) {
+      col.style.cursor = 'pointer';
+      col.addEventListener('click', () => openDayDetail(col.dataset.date));
+    }
+  });
+  $$('.recent-commit', $('#modal-body')).forEach(r => {
+    r.addEventListener('click', () => openCommitDiff(r.dataset.proj, r.dataset.sha));
+  });
+  attachTooltips($('#modal-body'));
+}
+
+// Generic modal opener used by all the detail views above.
+function openModalEmpty(title) {
+  $('#modal-scrim').classList.add('open');
+  $('#modal-card').classList.add('open');
+  $('#modal-title').innerHTML = `<div class="modal-title-text">${escapeHtml(title)}</div>`;
+  $('#modal-body').innerHTML = '<div class="empty-state">Loading…</div>';
+}
+
 window.reconnect = reconnect;
 window.closeDrawer = closeDrawer;
 window.closeModal = closeModal;
 window.closePalette = closePalette;
+window.openWishlist = openWishlist;
+window.closeWishlist = closeWishlist;
+window.addWishlistItem = addWishlistItem;
+window.openDayDetail = openDayDetail;
 init();
 setupDrawerScroll();
