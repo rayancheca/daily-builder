@@ -352,6 +352,28 @@ main {
   box-shadow: 0 0 12px var(--amber);
   animation: pulse-glow 2s infinite;
 }
+/* "Last shipped" mode — calmer green dot, no pulse. The hero is showing
+   recent ship history, not a live build. */
+.hero-eyebrow.hero-eyebrow-shipped::before {
+  background: var(--green, oklch(76% 0.18 150));
+  box-shadow: 0 0 10px oklch(76% 0.18 150 / 0.7);
+  animation: none;
+}
+.hero-eyebrow.hero-eyebrow-shipped { color: oklch(82% 0.10 150); }
+.hero-eyebrow.hero-eyebrow-building::before {
+  background: var(--blue, oklch(72% 0.18 250));
+  box-shadow: 0 0 12px oklch(72% 0.18 250 / 0.8);
+}
+/* Inline code chip for the hero copy ("./start.sh" mention) */
+.hero-code {
+  background: var(--bg3);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text1);
+  border: 1px solid oklch(100% 0 0 / 0.06);
+}
 @keyframes pulse-glow {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.6; transform: scale(1.3); }
@@ -3343,5 +3365,234 @@ body.playmode::before {
 @keyframes live-pulse {
   0%, 100% { transform: scale(1); opacity: 1; }
   50%      { transform: scale(1.4); opacity: 0.7; }
+}
+
+/* ============================================================ */
+/* === Activity tile drilldowns                              === */
+/* ============================================================ */
+
+/* Visual hint that a tile is clickable: subtle border-glow + cursor */
+.tile.tile-clickable {
+  cursor: pointer;
+  transition: border-color 200ms var(--ease), transform 200ms var(--ease), box-shadow 240ms var(--ease);
+}
+.tile.tile-clickable::after {
+  content: '↗';
+  position: absolute;
+  top: 16px; right: 18px;
+  font-size: 14px;
+  color: var(--text3);
+  opacity: 0;
+  transition: opacity 200ms ease, transform 240ms ease;
+  pointer-events: none;
+  z-index: 4;
+}
+.tile.tile-clickable:hover {
+  border-color: var(--border-strong);
+  box-shadow: 0 14px 40px oklch(0% 0 0 / 0.4), 0 0 1px oklch(70% 0.18 270 / 0.5);
+}
+.tile.tile-clickable:hover::after {
+  opacity: 0.85;
+  transform: translateX(2px) translateY(-2px);
+}
+
+/* Quota modal — token mix bars + project burn rows */
+.quota-mix { display: flex; flex-direction: column; gap: 10px; }
+.quota-mix-row {
+  display: grid;
+  grid-template-columns: 130px 1fr 100px 60px;
+  align-items: center;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.quota-mix-label {
+  display: flex; align-items: center; gap: 8px;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.quota-mix-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  box-shadow: 0 0 8px currentColor;
+}
+.quota-mix-bar {
+  height: 8px;
+  background: oklch(100% 0 0 / 0.04);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.quota-mix-bar > div {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 480ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.quota-mix-value { color: var(--text1); text-align: right; }
+.quota-mix-pct { color: var(--text3); text-align: right; }
+
+.quota-projects { display: flex; flex-direction: column; gap: 8px; }
+.quota-proj-row {
+  display: grid;
+  grid-template-columns: 200px 1fr 110px 70px;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  background: oklch(16% 0.010 250 / 0.5);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  transition: border-color 200ms ease, transform 200ms ease;
+  animation: rowFadeIn 360ms calc(var(--i) * 40ms) both cubic-bezier(0.16, 1, 0.3, 1);
+}
+.quota-proj-row:hover {
+  border-color: var(--border-strong);
+  transform: translateX(4px);
+}
+.quota-proj-name { color: var(--text0); font-weight: 600; font-family: var(--font-sans); font-size: 13px; }
+.quota-proj-bar {
+  height: 6px;
+  background: oklch(100% 0 0 / 0.04);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.quota-proj-bar > div {
+  height: 100%;
+  background: linear-gradient(90deg, oklch(72% 0.18 250), oklch(70% 0.20 290));
+  border-radius: 3px;
+  box-shadow: 0 0 12px oklch(70% 0.20 280 / 0.4);
+}
+.quota-proj-value { color: var(--text1); text-align: right; }
+.quota-proj-cost { color: oklch(78% 0.14 150); text-align: right; font-weight: 600; }
+
+@keyframes rowFadeIn {
+  from { opacity: 0; transform: translateX(-12px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* Languages modal — mode toggle */
+.lang-mode-tabs { display: flex; gap: 6px; margin-bottom: 16px; }
+.lang-tab {
+  background: oklch(16% 0.010 250 / 0.5);
+  border: 1px solid var(--border);
+  color: var(--text2);
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 200ms var(--ease);
+}
+.lang-tab:hover { color: var(--text0); border-color: var(--border-strong); }
+.lang-tab.active {
+  color: var(--text0);
+  background: oklch(22% 0.014 250);
+  border-color: oklch(70% 0.18 270 / 0.5);
+  box-shadow: 0 0 16px oklch(70% 0.18 270 / 0.18);
+}
+
+/* Velocity modal — bar+rolling-avg overlay */
+.velocity-detail {
+  background: oklch(14% 0.008 250 / 0.6);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px;
+}
+.vel-bar { transition: opacity 160ms ease; }
+.vel-bar:hover { opacity: 0.7; }
+
+/* Heatmap modal — full-size grid + hour distribution */
+.hm-detail {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  grid-template-rows: 1fr 22px;
+  gap: 6px;
+}
+.hm-day-labels {
+  display: flex; flex-direction: column;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+.hm-grid {
+  display: grid;
+  grid-template-columns: repeat(24, 1fr);
+  grid-template-rows: repeat(7, 1fr);
+  gap: 3px;
+  height: 200px;
+}
+.hmcell {
+  background: oklch(20% 0.010 250 / 0.5);
+  border-radius: 3px;
+  transition: transform 140ms ease, box-shadow 200ms ease;
+}
+.hmcell.l1 { background: oklch(40% 0.10 220 / 0.5); }
+.hmcell.l2 { background: oklch(58% 0.16 240 / 0.7); }
+.hmcell.l3 { background: oklch(72% 0.18 260 / 0.85); }
+.hmcell.l4 { background: oklch(82% 0.18 280); box-shadow: 0 0 8px oklch(78% 0.18 270 / 0.6); }
+.hmcell:hover {
+  transform: scale(1.4);
+  z-index: 4;
+  box-shadow: 0 0 16px oklch(78% 0.18 270 / 0.7);
+}
+.hm-hour-labels {
+  grid-column: 2;
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text3);
+  margin-top: 4px;
+}
+
+.hm-hours {
+  display: grid;
+  grid-template-columns: repeat(24, 1fr);
+  gap: 3px;
+  height: 90px;
+  align-items: end;
+  background: oklch(14% 0.008 250 / 0.5);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+}
+.hm-hour-col {
+  display: flex; flex-direction: column;
+  align-items: center;
+  height: 100%;
+}
+.hm-hour-fill {
+  width: 100%;
+  background: linear-gradient(180deg, oklch(82% 0.16 320), oklch(64% 0.20 270));
+  border-radius: 2px 2px 0 0;
+  transition: height 480ms cubic-bezier(0.16, 1, 0.3, 1);
+  min-height: 2px;
+}
+.hm-hour-label {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: var(--text3);
+  margin-top: 4px;
+}
+
+/* Commit log modal — project filter pills */
+.commit-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.commit-filter-row .filter-pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
 

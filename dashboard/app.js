@@ -73,6 +73,7 @@ async function loadQuota() {
     const r = await fetch('/api/quota', { cache: 'no-store' });
     if (!r.ok) return;
     const q = await r.json();
+    state.quota = q;        // cache for the drilldown modal
     renderQuota(q);
   } catch (e) {
     // non-fatal — telemetry is best-effort
@@ -119,6 +120,7 @@ function render() {
   renderProjects(d);
   renderCommitFeed(d);
   renderSessionLog(d);
+  attachActivityDrilldowns();
 }
 
 function renderTicker(d) {
@@ -166,37 +168,55 @@ function renderHero(d) {
   const stats = d.cross_stats;
   const heroEl = $('#hero-main');
   if (active) {
-    const total = active.completed.length + active.next_steps.length;
-    const pct = total > 0 ? Math.round(100 * active.completed.length / total) : 0;
-    const live = active.live_signal === 'recent_git';
-    const eyebrow = live
-      ? `Live Activity · last touched ${fmt.ago(active.last_activity)}`
-      : `Now Building · Session ${active.session}`;
-    const sub = live
-      ? `${escapeHtml(active.in_progress || 'Polishing')} · ${active.commit_count} commits so far`
-      : escapeHtml(active.in_progress || 'Setting up project structure');
+    const completedArr = Array.isArray(active.completed) ? active.completed : [];
+    const nextStepsArr = Array.isArray(active.next_steps) ? active.next_steps : [];
+    const total = completedArr.length + nextStepsArr.length;
+    const pct = total > 0 ? Math.round(100 * completedArr.length / total) : 0;
+    const isShipped = active.live_signal === 'last_shipped' || active.status === 'SHIPPED';
+    const isLiveBuild = active.live_signal === 'recent_git' || active.status === 'IN_PROGRESS' || active.status === 'ACTIVE';
+
+    let eyebrow, sub, badgeClass;
+    if (isShipped) {
+      // No active build — show last ship as a positive idle state.
+      eyebrow = `Last shipped · ${fmt.ago(active.last_activity)}`;
+      sub = `${active.commit_count || 0} commits · ${fmt.num(active.total_lines || stats.total_additions || 0)} lines · run <code class="hero-code">./start.sh</code> to begin a new build`;
+      badgeClass = 'shipped';
+    } else if (isLiveBuild) {
+      eyebrow = `Live activity · last touched ${fmt.ago(active.last_activity)}`;
+      sub = `${escapeHtml(active.in_progress || 'Polishing')} · ${active.commit_count || 0} commits so far`;
+      badgeClass = 'building';
+    } else {
+      eyebrow = `Now building · Session ${active.session || 1}`;
+      sub = escapeHtml(active.in_progress || 'Setting up project structure');
+      badgeClass = 'building';
+    }
+
     heroEl.innerHTML = `
-      <div class="hero-eyebrow">${escapeHtml(eyebrow)}</div>
+      <div class="hero-eyebrow hero-eyebrow-${badgeClass}">${escapeHtml(eyebrow)}</div>
       <div class="hero-headline">${escapeHtml(active.name)}</div>
       <div class="hero-sub">${sub}</div>
-      <div class="hero-progress">
-        <div class="hero-progress-label">
-          <span>${live ? 'Build progress' : 'Progress'}</span>
-          <span>${active.completed.length} / ${total} steps · ${pct}%</span>
+      ${isShipped ? '' : `
+        <div class="hero-progress">
+          <div class="hero-progress-label">
+            <span>Build progress</span>
+            <span>${completedArr.length} / ${total} steps · ${pct}%</span>
+          </div>
+          <div class="hero-progress-bar">
+            <div class="hero-progress-fill" style="width:${pct}%"></div>
+          </div>
         </div>
-        <div class="hero-progress-bar">
-          <div class="hero-progress-fill" style="width:${pct}%"></div>
-        </div>
-      </div>
+      `}
     `;
     heroEl.onclick = () => openDrawer(active.name);
+    heroEl.style.cursor = 'pointer';
   } else {
     heroEl.innerHTML = `
       <div class="hero-eyebrow">Idle</div>
       <div class="hero-headline">No project running</div>
-      <div class="hero-sub">Run <code style="background:var(--bg3);padding:2px 8px;border-radius:4px;font-family:var(--font-mono);font-size:13px">./start.sh</code> to begin a new build.</div>
+      <div class="hero-sub">Run <code class="hero-code">./start.sh</code> to begin a new build.</div>
     `;
     heroEl.onclick = null;
+    heroEl.style.cursor = 'default';
   }
 
   $('#stat-projects').textContent = stats.total_projects;
@@ -712,9 +732,17 @@ function renderProjectSparkline(p) {
 }
 
 function drawerOverview(p) {
-  const total = p.completed.length + p.next_steps.length;
-  const pct = total > 0 ? Math.round(100 * p.completed.length / total) : 0;
-  const cleanColor = p.git_status.clean ? 'var(--green)' : 'var(--amber)';
+  // Defensive: payloads from /api/project may legitimately omit fields
+  // when the underlying repo is mid-state (no git history, no state.md,
+  // working tree never touched). Coerce everything before computing.
+  const completedArr = Array.isArray(p.completed) ? p.completed : [];
+  const nextStepsArr = Array.isArray(p.next_steps) ? p.next_steps : [];
+  const gitStatus = p.git_status || { clean: true, modified: [], added: [], untracked: [] };
+  const modifiedArr = Array.isArray(gitStatus.modified) ? gitStatus.modified : [];
+  const untrackedArr = Array.isArray(gitStatus.untracked) ? gitStatus.untracked : [];
+  const total = completedArr.length + nextStepsArr.length;
+  const pct = total > 0 ? Math.round(100 * completedArr.length / total) : 0;
+  const cleanColor = gitStatus.clean ? 'var(--green)' : 'var(--amber)';
   return `
     <div class="dr-mini-grid">
       <div class="dr-mini">
@@ -749,7 +777,7 @@ function drawerOverview(p) {
       <div class="dr-section-title">Progress</div>
       <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:20px">
         <div style="display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:11px;color:var(--text2);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.1em">
-          <span>${p.completed.length} / ${total} steps</span>
+          <span>${completedArr.length} / ${total} steps</span>
           <span>${pct}%</span>
         </div>
         <div class="hero-progress-bar"><div class="hero-progress-fill" style="width:${pct}%"></div></div>
@@ -762,22 +790,22 @@ function drawerOverview(p) {
         <div style="flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:18px">
           <div style="font-family:var(--font-mono);font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:0.12em">Working tree</div>
           <div style="font-size:18px;font-weight:700;margin-top:8px;color:${cleanColor}">
-            ${p.git_status.clean ? '✓ Clean' : `◉ ${p.git_status.modified.length + p.git_status.untracked.length} changed`}
+            ${gitStatus.clean ? '✓ Clean' : `◉ ${modifiedArr.length + untrackedArr.length} changed`}
           </div>
         </div>
         <div style="flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:18px">
           <div style="font-family:var(--font-mono);font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:0.12em">Modified · Untracked</div>
           <div style="font-size:18px;font-weight:700;margin-top:8px;color:var(--text0)">
-            ${p.git_status.modified.length} <span style="color:var(--text3)">·</span> ${p.git_status.untracked.length}
+            ${modifiedArr.length} <span style="color:var(--text3)">·</span> ${untrackedArr.length}
           </div>
         </div>
       </div>
     </div>
 
-    ${p.completed.length ? `
+    ${completedArr.length ? `
       <div class="dr-section">
-        <div class="dr-section-title">Completed Steps · ${p.completed.length}</div>
-        ${p.completed.slice().reverse().slice(0, 12).map((s, i) => `
+        <div class="dr-section-title">Completed Steps · ${completedArr.length}</div>
+        ${completedArr.slice().reverse().slice(0, 12).map((s, i) => `
           <div class="step-row">
             <span class="step-num done">✓</span>
             <span class="step-text">${escapeHtml(s)}</span>
@@ -786,10 +814,10 @@ function drawerOverview(p) {
       </div>
     ` : ''}
 
-    ${p.next_steps.length ? `
+    ${nextStepsArr.length ? `
       <div class="dr-section">
-        <div class="dr-section-title">Next Steps · ${p.next_steps.length}</div>
-        ${p.next_steps.map((s, i) => `
+        <div class="dr-section-title">Next Steps · ${nextStepsArr.length}</div>
+        ${nextStepsArr.map((s, i) => `
           <div class="step-row">
             <span class="step-num todo">${i+1}.</span>
             <span class="step-text">${escapeHtml(s)}</span>
@@ -1826,6 +1854,357 @@ function openModalEmpty(title) {
   $('#modal-body').innerHTML = '<div class="empty-state">Loading…</div>';
 }
 
+// =====================================================================
+// Activity tile drilldowns
+// =====================================================================
+// Each Activity tile now opens a rich detail modal with extra charts,
+// toggles, and clickable rows. Wired by attachActivityDrilldowns()
+// which is idempotent and called on every render so dynamically-added
+// tiles still get handlers.
+
+function attachActivityDrilldowns() {
+  const tiles = [
+    { id: 'quota-tile', open: openQuotaDetail },
+    { sel: '.tile-title', match: t => t.textContent.trim().startsWith('Activity Calendar'), open: () => openCalendarDetail() },
+    { sel: '.tile-title', match: t => t.textContent.trim() === 'Languages', open: () => openLanguagesDetail() },
+    { sel: '.tile-title', match: t => t.textContent.trim().startsWith('Velocity'), open: () => openVelocityDetail() },
+    { sel: '.tile-title', match: t => t.textContent.trim() === 'When you build', open: () => openHeatmapDetail() },
+    { sel: '.tile-title', match: t => t.textContent.trim() === 'Recent Commits', open: () => openCommitsLogDetail() },
+  ];
+  tiles.forEach(spec => {
+    let tile = null;
+    if (spec.id) {
+      tile = document.getElementById(spec.id);
+    } else if (spec.sel && spec.match) {
+      const cand = $$(spec.sel).find(spec.match);
+      tile = cand?.closest('.tile');
+    }
+    if (!tile || tile.dataset.drilldownWired) return;
+    tile.dataset.drilldownWired = '1';
+    tile.classList.add('tile-clickable');
+    tile.addEventListener('click', (e) => {
+      // Skip if click landed on an inner clickable child (commit row, project row)
+      if (e.target.closest('.feed-item, .quota-row, button, a')) return;
+      spec.open();
+    });
+  });
+}
+
+async function openQuotaDetail() {
+  let q = state.quota;
+  if (!q) {
+    openModalEmpty('Token Usage · loading…');
+    try {
+      const r = await fetch('/api/quota', { cache: 'no-store' });
+      q = r.ok ? await r.json() : null;
+      state.quota = q;
+    } catch { q = null; }
+    if (!q) {
+      $('#modal-body').innerHTML = '<div class="empty-state">Could not load quota data.</div>';
+      return;
+    }
+  }
+  openModalEmpty(`Token Usage · ${fmt.num(q.weekly?.total_tokens || 0)} this week`);
+  const w = q.weekly || {};
+  const a = q.all_time || {};
+  const pp = q.per_project || {};
+  const top = Object.entries(pp)
+    .map(([name, v]) => ({ name, ...v }))
+    .sort((a, b) => (b.total_tokens || 0) - (a.total_tokens || 0))
+    .slice(0, 8);
+  const maxProj = Math.max(1, ...top.map(p => p.total_tokens || 0));
+  // Anthropic Sonnet 4.6: $3/M input, $15/M output, $3.75/M cache write, $0.30/M cache read
+  const cost = (v) => (
+    (v.input_tokens || 0) * 3 / 1_000_000 +
+    (v.output_tokens || 0) * 15 / 1_000_000 +
+    (v.cache_creation_tokens || 0) * 3.75 / 1_000_000 +
+    (v.cache_read_tokens || 0) * 0.30 / 1_000_000
+  );
+  $('#modal-body').innerHTML = `
+    <div class="dr-mini-grid">
+      <div class="dr-mini"><div class="dr-mini-label">This Week</div><div class="dr-mini-value">${fmt.num(w.total_tokens || 0)}</div></div>
+      <div class="dr-mini"><div class="dr-mini-label">Messages</div><div class="dr-mini-value">${fmt.num(w.messages || 0)}</div></div>
+      <div class="dr-mini"><div class="dr-mini-label">All-time</div><div class="dr-mini-value">${fmt.num(a.total_tokens || 0)}</div></div>
+      <div class="dr-mini"><div class="dr-mini-label">Est. cost / wk</div><div class="dr-mini-value">$${cost(w).toFixed(2)}</div></div>
+    </div>
+
+    <div class="dr-section">
+      <div class="dr-section-title">This week — token mix</div>
+      <div class="quota-mix">
+        ${[
+          ['Input', w.input_tokens, 'oklch(72% 0.18 250)'],
+          ['Output', w.output_tokens, 'oklch(70% 0.20 270)'],
+          ['Cache write', w.cache_creation_tokens, 'oklch(74% 0.18 200)'],
+          ['Cache read', w.cache_read_tokens, 'oklch(76% 0.18 160)'],
+        ].map(([label, v, color]) => {
+          const total = w.total_tokens || 1;
+          const pct = ((v || 0) / total) * 100;
+          return `
+            <div class="quota-mix-row">
+              <div class="quota-mix-label"><span class="quota-mix-dot" style="background:${color}"></span>${label}</div>
+              <div class="quota-mix-bar"><div style="width:${pct}%;background:${color}"></div></div>
+              <div class="quota-mix-value">${fmt.num(v || 0)}</div>
+              <div class="quota-mix-pct">${pct.toFixed(1)}%</div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+
+    <div class="dr-section">
+      <div class="dr-section-title">Top projects · by burn</div>
+      <div class="quota-projects">
+        ${top.map((p, i) => {
+          const pct = ((p.total_tokens || 0) / maxProj) * 100;
+          return `
+            <div class="quota-proj-row" data-name="${escapeAttr(p.name)}" style="--i:${i}">
+              <div class="quota-proj-name">${escapeHtml(p.name)}</div>
+              <div class="quota-proj-bar"><div style="width:${pct}%"></div></div>
+              <div class="quota-proj-value">${fmt.num(p.total_tokens || 0)}</div>
+              <div class="quota-proj-cost">$${cost(p).toFixed(2)}</div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+  `;
+  $$('.quota-proj-row').forEach(el => {
+    el.style.cursor = 'pointer';
+    el.addEventListener('click', () => {
+      closeModal();
+      setTimeout(() => openDrawer(el.dataset.name), 200);
+    });
+  });
+}
+
+function openCalendarDetail() {
+  const d = state.data;
+  if (!d) return;
+  const cal = d.streak_calendar || [];
+  const last90 = cal.slice(-90);
+  const max = Math.max(1, ...last90.map(c => c.count));
+  const totalCommits = last90.reduce((s, c) => s + c.count, 0);
+  const activeDays = last90.filter(c => c.count > 0).length;
+  const longestStreak = (() => {
+    let best = 0, cur = 0;
+    for (const day of cal) { if (day.count > 0) { cur++; best = Math.max(best, cur); } else cur = 0; }
+    return best;
+  })();
+  openModalEmpty(`Activity · ${cal.length} days tracked`);
+  $('#modal-body').innerHTML = `
+    <div class="dr-mini-grid">
+      <div class="dr-mini"><div class="dr-mini-label">Last 90d</div><div class="dr-mini-value">${totalCommits}</div></div>
+      <div class="dr-mini"><div class="dr-mini-label">Active days</div><div class="dr-mini-value">${activeDays}</div></div>
+      <div class="dr-mini"><div class="dr-mini-label">Current streak</div><div class="dr-mini-value">${d.streak}</div></div>
+      <div class="dr-mini"><div class="dr-mini-label">Longest streak</div><div class="dr-mini-value">${longestStreak}</div></div>
+    </div>
+    <div class="dr-section">
+      <div class="dr-section-title">Last 90 days · click any day</div>
+      <div class="streak-chart">
+        ${last90.map((day, i) => {
+          const h = Math.round((day.count / max) * 100);
+          return `<div class="streak-col" style="--i:${i}" data-tip="${day.date}: ${day.count} commits" data-date="${day.date}" data-count="${day.count}"><div class="streak-col-bar" style="--h:${Math.max(h, day.count > 0 ? 4 : 0)}%"></div><div class="streak-col-day">${day.date.slice(-2)}</div></div>`;
+        }).join('')}
+      </div>
+    </div>
+  `;
+  $$('.streak-col', $('#modal-body')).forEach(col => {
+    if (Number(col.dataset.count) > 0) {
+      col.style.cursor = 'pointer';
+      col.addEventListener('click', () => openDayDetail(col.dataset.date));
+    }
+  });
+  attachTooltips($('#modal-body'));
+}
+
+function openLanguagesDetail() {
+  const langs = (state.data?.cross_stats?.languages) || [];
+  if (!langs.length) return;
+  openModalEmpty('Languages · portfolio breakdown');
+  let mode = 'lines';
+  const total = (key) => langs.reduce((s, l) => s + (l[key] || 0), 0);
+  const render = () => {
+    const totalLines = total('lines');
+    const totalFiles = total('count');
+    const display = langs.slice(0, 12);
+    const denom = total(mode === 'lines' ? 'lines' : 'count');
+    $('#modal-body').innerHTML = `
+      <div class="lang-mode-tabs">
+        <button class="lang-tab ${mode === 'lines' ? 'active' : ''}" data-mode="lines">Lines of code</button>
+        <button class="lang-tab ${mode === 'files' ? 'active' : ''}" data-mode="files">File count</button>
+      </div>
+      <div class="dr-mini-grid">
+        <div class="dr-mini"><div class="dr-mini-label">Languages</div><div class="dr-mini-value">${langs.length}</div></div>
+        <div class="dr-mini"><div class="dr-mini-label">Total LOC</div><div class="dr-mini-value">${fmt.num(totalLines)}</div></div>
+        <div class="dr-mini"><div class="dr-mini-label">Total files</div><div class="dr-mini-value">${fmt.num(totalFiles)}</div></div>
+        <div class="dr-mini"><div class="dr-mini-label">Top</div><div class="dr-mini-value" style="color:${langs[0]?.color || '#fff'};font-size:18px">${langs[0]?.lang || '—'}</div></div>
+      </div>
+      <div class="dr-section">
+        <div class="dr-section-title">Distribution</div>
+        <div class="lang-bars">
+          ${display.map(l => {
+            const v = mode === 'lines' ? (l.lines || 0) : (l.count || 0);
+            const pct = denom ? (v / denom) * 100 : 0;
+            return `
+              <div class="lang-row">
+                <span class="lang-dot" style="background:${l.color}"></span>
+                <span class="lang-name">${escapeHtml(l.lang)}</span>
+                <div class="lang-bar-wrap"><div class="lang-bar-fill" style="width:${pct}%; background:${l.color}"></div></div>
+                <span class="lang-pct">${fmt.num(v)} ${mode === 'lines' ? 'L' : 'files'} · ${pct.toFixed(1)}%</span>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+    `;
+    $$('.lang-tab').forEach(b => b.addEventListener('click', () => { mode = b.dataset.mode; render(); }));
+  };
+  render();
+}
+
+function openVelocityDetail() {
+  const v = state.data?.velocity || [];
+  if (!v.length) return;
+  openModalEmpty(`Velocity · last ${v.length} days`);
+  const counts = v.map(d => d.count);
+  const totalCommits = counts.reduce((s, n) => s + n, 0);
+  const max = Math.max(1, ...counts);
+  const peakDay = v.reduce((best, d) => (d.count > best.count ? d : best), { count: 0, date: '' });
+  // 7-day rolling avg
+  const rolling = counts.map((_, i) => {
+    const slice = counts.slice(Math.max(0, i - 6), i + 1);
+    return slice.reduce((s, n) => s + n, 0) / slice.length;
+  });
+  const rollMax = Math.max(1, ...rolling);
+  const half = Math.floor(v.length / 2);
+  const recent = counts.slice(half).reduce((s, n) => s + n, 0);
+  const prior = counts.slice(0, half).reduce((s, n) => s + n, 0);
+  const delta = prior ? Math.round(((recent - prior) / prior) * 100) : 0;
+  $('#modal-body').innerHTML = `
+    <div class="dr-mini-grid">
+      <div class="dr-mini"><div class="dr-mini-label">Total commits</div><div class="dr-mini-value">${totalCommits}</div></div>
+      <div class="dr-mini"><div class="dr-mini-label">Per day avg</div><div class="dr-mini-value">${(totalCommits / v.length).toFixed(1)}</div></div>
+      <div class="dr-mini"><div class="dr-mini-label">Peak day</div><div class="dr-mini-value" style="font-size:18px">${peakDay.count}</div></div>
+      <div class="dr-mini"><div class="dr-mini-label">Δ vs. prior</div><div class="dr-mini-value" style="color:${delta >= 0 ? 'var(--green)' : 'var(--amber)'}">${delta >= 0 ? '+' : ''}${delta}%</div></div>
+    </div>
+    <div class="dr-section">
+      <div class="dr-section-title">Daily commits · 7-day rolling overlay</div>
+      <div class="velocity-detail">
+        <svg viewBox="0 0 ${v.length * 22} 240" preserveAspectRatio="none" style="width:100%;height:240px">
+          ${v.map((d, i) => {
+            const h = (d.count / max) * 200;
+            const x = i * 22;
+            return `<rect x="${x + 2}" y="${220 - h}" width="18" height="${h}" rx="3" fill="url(#velgrad)" data-tip="${d.date}: ${d.count} commits" data-date="${d.date}" data-count="${d.count}" class="vel-bar"/>`;
+          }).join('')}
+          <defs>
+            <linearGradient id="velgrad" x1="0" x2="0" y1="0" y2="1">
+              <stop offset="0%" stop-color="oklch(78% 0.18 220)"/>
+              <stop offset="100%" stop-color="oklch(58% 0.20 270)"/>
+            </linearGradient>
+          </defs>
+          <polyline points="${rolling.map((r, i) => `${i * 22 + 11},${220 - (r / rollMax) * 200}`).join(' ')}"
+            fill="none" stroke="oklch(82% 0.16 320)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>
+        </svg>
+      </div>
+    </div>
+  `;
+  $$('.vel-bar', $('#modal-body')).forEach(bar => {
+    if (Number(bar.dataset.count) > 0) {
+      bar.style.cursor = 'pointer';
+      bar.addEventListener('click', () => openDayDetail(bar.dataset.date));
+    }
+  });
+  attachTooltips($('#modal-body'));
+}
+
+function openHeatmapDetail() {
+  const hm = state.data?.heatmap;
+  if (!hm) return;
+  openModalEmpty('When you build · 7d × 24h');
+  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  let max = 0, peakHour = 0, peakDay = 0;
+  hm.forEach((row, di) => row.forEach((v, hi) => {
+    if (v > max) { max = v; peakHour = hi; peakDay = di; }
+  }));
+  const totalByHour = Array(24).fill(0);
+  const totalByDay = Array(7).fill(0);
+  hm.forEach((row, di) => row.forEach((v, hi) => { totalByHour[hi] += v; totalByDay[di] += v; }));
+  // Deep work stretches: per day, count runs of >=3 consecutive nonzero hours
+  let stretches = 0;
+  hm.forEach(row => {
+    let run = 0;
+    row.forEach(v => { if (v > 0) { run++; if (run === 3) stretches++; } else run = 0; });
+  });
+  const cellHtml = hm.map((row, di) => row.map((v, hi) => {
+    const intensity = max ? v / max : 0;
+    const cls = intensity === 0 ? 'l0' : intensity < 0.25 ? 'l1' : intensity < 0.5 ? 'l2' : intensity < 0.75 ? 'l3' : 'l4';
+    return `<div class="hmcell ${cls}" data-tip="${days[di]} ${String(hi).padStart(2,'0')}:00 — ${v} commits"></div>`;
+  }).join('')).join('');
+  $('#modal-body').innerHTML = `
+    <div class="dr-mini-grid">
+      <div class="dr-mini"><div class="dr-mini-label">Peak hour</div><div class="dr-mini-value">${String(peakHour).padStart(2,'0')}:00</div></div>
+      <div class="dr-mini"><div class="dr-mini-label">Peak day</div><div class="dr-mini-value" style="font-size:22px">${days[peakDay]}</div></div>
+      <div class="dr-mini"><div class="dr-mini-label">Deep-work stretches</div><div class="dr-mini-value">${stretches}</div></div>
+      <div class="dr-mini"><div class="dr-mini-label">Total commits</div><div class="dr-mini-value">${totalByHour.reduce((s, n) => s + n, 0)}</div></div>
+    </div>
+    <div class="dr-section">
+      <div class="dr-section-title">Heatmap</div>
+      <div class="hm-detail">
+        <div class="hm-day-labels">${days.map(d => `<div>${d}</div>`).join('')}</div>
+        <div class="hm-grid">${cellHtml}</div>
+        <div class="hm-hour-labels">${[0,3,6,9,12,15,18,21].map(h => `<div>${String(h).padStart(2,'0')}</div>`).join('')}</div>
+      </div>
+    </div>
+    <div class="dr-section">
+      <div class="dr-section-title">Hour distribution</div>
+      <div class="hm-hours">
+        ${totalByHour.map((v, i) => {
+          const pct = Math.max(...totalByHour) ? (v / Math.max(...totalByHour)) * 100 : 0;
+          return `<div class="hm-hour-col"><div class="hm-hour-fill" style="height:${pct}%"></div><div class="hm-hour-label">${String(i).padStart(2,'0')}</div></div>`;
+        }).join('')}
+      </div>
+    </div>
+  `;
+  attachTooltips($('#modal-body'));
+}
+
+function openCommitsLogDetail() {
+  const commits = state.data?.recent_commits || [];
+  openModalEmpty(`Recent Commits · ${commits.length}`);
+  const projects = Array.from(new Set(commits.map(c => c.project)));
+  let projFilter = 'all';
+  const render = () => {
+    const list = projFilter === 'all' ? commits : commits.filter(c => c.project === projFilter);
+    $('#modal-body').innerHTML = `
+      <div class="commit-filter-row">
+        <button class="filter-pill ${projFilter === 'all' ? 'active' : ''}" data-proj="all">All · ${commits.length}</button>
+        ${projects.map(p => `<button class="filter-pill ${projFilter === p ? 'active' : ''}" data-proj="${escapeAttr(p)}">${escapeHtml(p)}</button>`).join('')}
+      </div>
+      <div class="commit-list" style="max-height:540px;overflow-y:auto">
+        ${list.map(c => `
+          <div class="commit-row" data-proj="${escapeAttr(c.project)}" data-sha="${escapeAttr(c.sha)}">
+            <div class="commit-info">
+              <div class="commit-subject">${escapeHtml(c.subject)}</div>
+              <div class="commit-meta">${escapeHtml(c.project)} · ${escapeHtml(c.author)} · ${fmt.ago(c.timestamp)} · ${c.files_changed} files</div>
+            </div>
+            <div class="commit-stats">
+              <span class="commit-add">+${c.additions}</span>
+              <span class="commit-del">−${c.deletions}</span>
+            </div>
+            <div class="commit-sha">${c.short}</div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+    $$('.commit-filter-row .filter-pill').forEach(b => b.addEventListener('click', () => { projFilter = b.dataset.proj; render(); }));
+    $$('.commit-row', $('#modal-body')).forEach(row => {
+      row.style.cursor = 'pointer';
+      row.addEventListener('click', () => openCommitDiff(row.dataset.proj, row.dataset.sha));
+    });
+  };
+  render();
+}
+
 window.reconnect = reconnect;
 window.closeDrawer = closeDrawer;
 window.closeModal = closeModal;
@@ -2175,17 +2554,87 @@ setupScrollReveal();
     });
     lastNeighbors = newNeighbors;
   }
-  function onPointerUp() {
+  function onPointerUp(ev) {
     if (!dragging) return;
     const tile = dragging;
-    // Spring-back animation
-    tile.style.transition = 'transform 520ms cubic-bezier(0.16, 1, 0.3, 1)';
-    tile.style.transform = '';
-    setTimeout(() => {
-      tile.style.transition = '';
+    const tileRect = tile.getBoundingClientRect();
+    const tileCenter = { x: tileRect.left + tileRect.width / 2, y: tileRect.top + tileRect.height / 2 };
+
+    // FLIP swap: find the closest in-row neighbor and exchange DOM positions.
+    // Only swap within the same .grid-row so layout flow is preserved.
+    let swapTarget = null;
+    if (didDrag) {
+      const candidates = Array.from(lastNeighbors)
+        .filter(n => n.parentElement === tile.parentElement)
+        .map(n => {
+          const r = n.getBoundingClientRect();
+          const cx = r.left + r.width / 2;
+          const cy = r.top + r.height / 2;
+          return { el: n, dist: Math.hypot(cx - tileCenter.x, cy - tileCenter.y), rect: r };
+        })
+        .sort((a, b) => a.dist - b.dist);
+      // Only swap if the dragged tile center actually crossed into the
+      // neighbor's bounding box (not just nearby) — prevents accidental
+      // swaps from small wiggles.
+      if (candidates.length) {
+        const top = candidates[0];
+        const r = top.rect;
+        const overlap = tileCenter.x >= r.left && tileCenter.x <= r.right
+                     && tileCenter.y >= r.top && tileCenter.y <= r.bottom;
+        if (overlap) swapTarget = top.el;
+      }
+    }
+
+    if (swapTarget) {
+      // Record FIRST positions (before DOM mutation)
+      const targetFirstRect = swapTarget.getBoundingClientRect();
+
+      // Reset the drag transform and position so the in-flow rect is real
+      tile.style.transform = '';
       tile.style.position = '';
-    }, 540);
-    tile.classList.remove('dragging');
+      tile.classList.remove('dragging');
+
+      // Capture dragged tile's in-flow rect AFTER reset, BEFORE DOM swap
+      const tileFirstRect = tile.getBoundingClientRect();
+
+      // DOM swap: insert tile before target, target before tile's old slot
+      // Use a placeholder to handle adjacency cleanly.
+      const parent = tile.parentElement;
+      const placeholder = document.createComment('swap');
+      parent.insertBefore(placeholder, tile);
+      parent.insertBefore(tile, swapTarget);
+      parent.insertBefore(swapTarget, placeholder);
+      parent.removeChild(placeholder);
+
+      // LAST positions (after swap) — animate INVERT → PLAY for both
+      const animateSwap = (el, fromRect) => {
+        const lastRect = el.getBoundingClientRect();
+        const dx = fromRect.left - lastRect.left;
+        const dy = fromRect.top - lastRect.top;
+        if (dx === 0 && dy === 0) return;
+        el.style.transition = 'none';
+        el.style.transform = `translate(${dx}px, ${dy}px)`;
+        // Force reflow so the browser registers the transform start state
+        // before transitioning to identity.
+        // eslint-disable-next-line no-unused-expressions
+        el.offsetHeight;
+        el.style.transition = 'transform 480ms cubic-bezier(0.16, 1, 0.3, 1)';
+        el.style.transform = '';
+        setTimeout(() => { el.style.transition = ''; }, 500);
+      };
+      animateSwap(tile, tileFirstRect);
+      animateSwap(swapTarget, targetFirstRect);
+    } else {
+      // No valid target — spring back to original slot
+      tile.style.transition = 'transform 520ms cubic-bezier(0.16, 1, 0.3, 1)';
+      tile.style.transform = '';
+      setTimeout(() => {
+        tile.style.transition = '';
+        tile.style.position = '';
+      }, 540);
+      tile.classList.remove('dragging');
+    }
+
     lastNeighbors.forEach(n => n.classList.remove('lean-left', 'lean-right'));
     lastNeighbors = new Set();
     dragging = null;

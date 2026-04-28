@@ -479,34 +479,71 @@ def _latest_git_activity(project_dir):
 
 
 def detect_active(projects):
-    """Pick the live project. Trust state.md when it says IN PROGRESS,
-    otherwise fall back to the most recent git activity within the
-    active window — Claude often marks state.md COMPLETE prematurely
-    while still committing polish work.
+    """Pick the truly-live project. Two-stage selection:
+
+    1. A project whose state.md says IN PROGRESS *and* whose authoritative
+       status is NOT 'shipped' is the live build. Claude often marks state.md
+       COMPLETE prematurely, so we cross-check via authoritative_status.
+    2. Otherwise — and ONLY if no project is genuinely shipped-but-recent —
+       fall back to the most recent git activity within the active window.
+       Critically: never promote a project that is authoritatively 'shipped'
+       (eval done, release commit landed) to ACTIVE just because git mtime
+       is fresh. That happens whenever you push polish or rewrite history,
+       and it lies to the dashboard.
+
+    Returns either a live project dict (with status='ACTIVE') or, when
+    everything is shipped/idle, the most-recently-shipped project tagged
+    status='SHIPPED' so the hero can render a "last shipped" view instead
+    of pretending a build is in progress.
     """
-    declared = next((p for p in projects if p['status'] != 'COMPLETE'), None)
+    declared = next((p for p in projects
+                     if p['status'] != 'COMPLETE'
+                     and p.get('authoritative_status') != 'shipped'), None)
     if declared:
         return declared
+
     now = time.time()
     candidates = []
     for p in projects:
+        if p.get('authoritative_status') == 'shipped':
+            continue  # skip — eval is done, this is not an active build
         proj_dir = os.path.join(PROJECTS_DIR, p['name'])
         latest = _latest_git_activity(proj_dir)
         if latest and now - latest < ACTIVE_WINDOW_SECONDS:
             candidates.append((latest, p))
-    if not candidates:
-        return None
-    candidates.sort(key=lambda x: -x[0])
-    latest_ts, p = candidates[0]
-    p = dict(p)
-    p['status'] = 'ACTIVE'
-    p['live_signal'] = 'recent_git'
-    p['last_activity'] = latest_ts
-    if not p.get('in_progress'):
-        log = _git_log_full(os.path.join(PROJECTS_DIR, p['name']), limit=1)
-        if log:
-            p['in_progress'] = f"latest: {log[0]['subject']}"
-    return p
+
+    if candidates:
+        candidates.sort(key=lambda x: -x[0])
+        latest_ts, p = candidates[0]
+        p = dict(p)
+        p['status'] = 'ACTIVE'
+        p['live_signal'] = 'recent_git'
+        p['last_activity'] = latest_ts
+        if not p.get('in_progress'):
+            log = _git_log_full(os.path.join(PROJECTS_DIR, p['name']), limit=1)
+            if log:
+                p['in_progress'] = f"latest: {log[0]['subject']}"
+        return p
+
+    # No live build. Surface the most recent ship so the hero can render
+    # a "last shipped" mode instead of "no project running" emptiness.
+    shipped = []
+    for p in projects:
+        if p.get('authoritative_status') != 'shipped':
+            continue
+        proj_dir = os.path.join(PROJECTS_DIR, p['name'])
+        latest = _latest_git_activity(proj_dir)
+        if latest:
+            shipped.append((latest, p))
+    if shipped:
+        shipped.sort(key=lambda x: -x[0])
+        latest_ts, p = shipped[0]
+        p = dict(p)
+        p['status'] = 'SHIPPED'  # explicit signal for the hero renderer
+        p['live_signal'] = 'last_shipped'
+        p['last_activity'] = latest_ts
+        return p
+    return None
 
 
 def streak_calendar(projects, days=365):
