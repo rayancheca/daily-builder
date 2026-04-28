@@ -104,6 +104,20 @@ def mark_built(item: str) -> bool:
     return True
 
 
+def curated_is_stale() -> bool:
+    """Return True iff `ensure_curated()` would call the LLM right now.
+
+    Lets `start.sh` decide whether to print the "refreshing…" spinner
+    instead of showing it unconditionally on every wishlist iteration.
+    """
+    if not WISHLIST_FILE.exists():
+        return False
+    unused = _read_section(WISHLIST_FILE, _UNUSED_RE, _BOX_OPEN)
+    if not unused:
+        return False
+    return _wishlist_hash(unused) != _curated_cached_hash() or not CURATED_FILE.exists()
+
+
 def ensure_curated(force: bool = False) -> List[str]:
     """Generate curated alternates if stale; return the current list.
 

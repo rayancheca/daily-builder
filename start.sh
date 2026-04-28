@@ -372,7 +372,17 @@ elif [ "$SELECTED_MODE" = "wishlist" ]; then
     # 3. After pick, mark Unused entries as Used (curated picks are not moved)
 
     while [ "$SELECTED_MODE" = "wishlist" ] && [ -z "$EXTRA_CONTEXT" ]; do
-        echo -e "  ${DIM}↻${RESET} Refreshing curated suggestions (silent, ~30s if needed)..."
+        # Only show the spinner when we'll actually call the LLM. The check
+        # is hash-based and instant; without this, the message printed on
+        # every menu iteration even when ensure_curated() did nothing.
+        STALE=$(PY - <<PYEOF
+from lib.wishlist import curated_is_stale
+print("1" if curated_is_stale() else "0")
+PYEOF
+)
+        if [ "$STALE" = "1" ]; then
+            echo -e "  ${DIM}↻${RESET} Refreshing curated suggestions via claude -p (~10-30s)..."
+        fi
         PY - >/dev/null 2>&1 <<PYEOF
 from lib.wishlist import ensure_curated
 ensure_curated()
@@ -416,10 +426,11 @@ PYEOF
         echo ""
         echo -e "  ${BOLD}Actions${RESET}:"
         echo -e "    ${GREEN}a${RESET} — add a new idea to your wishlist"
+        echo -e "    ${GREEN}g${RESET} — switch to guided mode (pick domain + angle)"
         echo -e "    ${GREEN}s${RESET} — switch to surprise mode instead"
         echo -e "    ${GREEN}q${RESET} — quit"
         echo ""
-        printf "  ${BOLD}Pick a number, or a/s/q:${RESET} "
+        printf "  ${BOLD}Pick a number, or a/g/s/q:${RESET} "
         read -r WISH_INPUT
 
         case "$WISH_INPUT" in
@@ -436,6 +447,38 @@ add_unused("""$NEW_IDEA""")
 PYEOF
                 echo -e "  ${GREEN}✓${RESET} Added to wishlist: ${BOLD}$NEW_IDEA${RESET}"
                 continue
+                ;;
+            g|G)
+                SELECTED_MODE="guided"
+                EXTRA_CONTEXT=""
+                echo ""
+                echo -e "  ${GREEN}▶${RESET} Switched to guided mode"
+                echo ""
+                echo -e "  ${BOLD}Pick a domain${RESET}:"
+                echo "    1 — Cybersecurity and Offensive/Defensive Security Tools"
+                echo "    2 — Systems Programming and Low-Level CS"
+                echo "    3 — Big Data, Data Engineering and Analytics Pipelines"
+                echo "    4 — AI/ML Engineering and Applied Intelligence"
+                echo "    5 — Network Engineering and Distributed Systems"
+                echo "    6 — Developer Tooling, CLIs and Platform Engineering"
+                echo ""
+                printf "  ${BOLD}Choice (1-6):${RESET} "
+                read -r DOMAIN_CHOICE
+                case "$DOMAIN_CHOICE" in
+                    1) DOMAIN_LABEL="Cybersecurity and Offensive/Defensive Security Tools" ;;
+                    2) DOMAIN_LABEL="Systems Programming and Low-Level CS" ;;
+                    3) DOMAIN_LABEL="Big Data, Data Engineering and Analytics Pipelines" ;;
+                    4) DOMAIN_LABEL="AI/ML Engineering and Applied Intelligence" ;;
+                    5) DOMAIN_LABEL="Network Engineering and Distributed Systems" ;;
+                    *) DOMAIN_LABEL="Developer Tooling, CLIs and Platform Engineering" ;;
+                esac
+                echo ""
+                echo -e "  ${BOLD}Give a specific angle or theme${RESET} (free text, one line):"
+                printf "  > "
+                read -r ANGLE
+                EXTRA_CONTEXT="DOMAIN: $DOMAIN_LABEL
+ANGLE: $ANGLE"
+                break
                 ;;
             s|S)
                 SELECTED_MODE="surprise"
