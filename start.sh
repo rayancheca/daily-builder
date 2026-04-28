@@ -36,6 +36,11 @@ LIB_DIR="$DAILY_BUILDER/lib"
 HISTORY_FILE="$DAILY_BUILDER/project_history.md"
 WISHLIST_FILE="$DAILY_BUILDER/wishlist.md"
 LOG_FILE="$DAILY_BUILDER/session.log"
+
+# Sonnet 4.6 is the orchestrator. Specialised agents (planner, *-reviewer, etc.)
+# can escalate to Opus internally via Task() — change this only if you want a
+# session-wide model override.
+CLAUDE_MODEL="claude-sonnet-4-6"
 DATE=$(date +%Y-%m-%d)
 TIME=$(date +%H:%M)
 
@@ -146,7 +151,7 @@ if [ -n "$POLISH_TARGET" ]; then
     echo ""
     echo -e "  ${CYAN}────────────────────────────────────────${RESET}"
     echo ""
-    claude --dangerously-skip-permissions \
+    claude --dangerously-skip-permissions --model "$CLAUDE_MODEL" \
         -p "$(cat "$PROMPTS_DIR/finishing_pass.md")"
     exit 0
 fi
@@ -251,7 +256,7 @@ PYEOF
         echo ""
         echo -e "  ${CYAN}────────────────────────────────────────${RESET}"
         echo ""
-        claude --dangerously-skip-permissions
+        claude --dangerously-skip-permissions --model "$CLAUDE_MODEL"
 
         # After Claude exits, run evaluator
         echo ""
@@ -353,48 +358,142 @@ elif [ "$SELECTED_MODE" = "guided" ]; then
 ANGLE: $ANGLE"
 
 elif [ "$SELECTED_MODE" = "wishlist" ]; then
-    if [ ! -f "$WISHLIST_FILE" ]; then
-        echo -e "  ${RED}✗${RESET} No wishlist.md found. Create one at $WISHLIST_FILE"
-        exit 1
-    fi
+    # ── Wishlist mode workflow ────────────────────────────
+    # The user always gets to choose between adding a new idea AND picking
+    # an existing one (or a curated alternate), no matter how full the list
+    # is. Loop until they either pick a number, switch modes, or quit.
+    #
+    # 1. Refresh curated.md silently if wishlist changed
+    # 2. Render: existing Unused + Curated, plus action shortcuts
+    #    a — add an idea (then re-render)
+    #    s — switch to surprise mode
+    #    q — quit
+    #    <N> — pick that numbered entry
+    # 3. After pick, mark Unused entries as Used (curated picks are not moved)
 
-    ENTRIES=$(PY - <<PYEOF
-from pathlib import Path
-import re
-text = Path("$WISHLIST_FILE").read_text(encoding="utf-8")
-unused_section = re.search(r"##\s*Unused\s*\n(.*?)(?:\n##|\Z)", text, re.DOTALL)
-if not unused_section:
-    print("")
-else:
-    body = unused_section.group(1)
-    items = re.findall(r"^- \[ \]\s+(.+)$", body, re.MULTILINE)
-    for i, it in enumerate(items, 1):
-        if "add your own" in it.lower():
-            continue
-        print(f"{i}|{it}")
+    while [ "$SELECTED_MODE" = "wishlist" ] && [ -z "$EXTRA_CONTEXT" ]; do
+        echo -e "  ${DIM}↻${RESET} Refreshing curated suggestions (silent, ~30s if needed)..."
+        PY - >/dev/null 2>&1 <<PYEOF
+from lib.wishlist import ensure_curated
+ensure_curated()
+PYEOF
+
+        # Pull both lists as a single newline-separated stream.
+        # Format: TYPE|N|TEXT  where TYPE is u (unused) or c (curated).
+        ENTRIES=$(PY - <<PYEOF
+from lib.wishlist import read_wishlist
+v = read_wishlist()
+n = 0
+for it in v.unused:
+    n += 1
+    print(f"u|{n}|{it}")
+for it in v.curated:
+    n += 1
+    print(f"c|{n}|{it}")
 PYEOF
 )
 
-    if [ -z "$ENTRIES" ]; then
-        echo -e "  ${YELLOW}Wishlist is empty.${RESET} Add ideas to $WISHLIST_FILE"
-        exit 0
-    fi
+        echo ""
+        UNUSED_LINES=$(echo "$ENTRIES" | awk -F'|' '$1=="u"')
+        if [ -n "$UNUSED_LINES" ]; then
+            echo -e "  ${BOLD}Your wishlist${RESET}:"
+            echo "$UNUSED_LINES" | while IFS='|' read -r _ NUM TEXT; do
+                echo -e "    ${CYAN}$NUM${RESET} — $TEXT"
+            done
+        else
+            echo -e "  ${DIM}Your wishlist is empty.${RESET}"
+        fi
 
-    echo -e "  ${BOLD}Unused wishlist entries${RESET}:"
-    echo "$ENTRIES" | while IFS='|' read -r NUM TEXT; do
-        echo -e "    ${CYAN}$NUM${RESET} — $TEXT"
+        CURATED_LINES=$(echo "$ENTRIES" | awk -F'|' '$1=="c"')
+        if [ -n "$CURATED_LINES" ]; then
+            echo ""
+            echo -e "  ${BOLD}${MAGENTA}Curated suggestions${RESET} ${DIM}(LLM-generated alternates)${RESET}:"
+            echo "$CURATED_LINES" | while IFS='|' read -r _ NUM TEXT; do
+                echo -e "    ${MAGENTA}$NUM${RESET} — $TEXT"
+            done
+        fi
+
+        echo ""
+        echo -e "  ${BOLD}Actions${RESET}:"
+        echo -e "    ${GREEN}a${RESET} — add a new idea to your wishlist"
+        echo -e "    ${GREEN}s${RESET} — switch to surprise mode instead"
+        echo -e "    ${GREEN}q${RESET} — quit"
+        echo ""
+        printf "  ${BOLD}Pick a number, or a/s/q:${RESET} "
+        read -r WISH_INPUT
+
+        case "$WISH_INPUT" in
+            a|A)
+                printf "  ${BOLD}Idea (one line):${RESET} "
+                read -r NEW_IDEA
+                if [ -z "$NEW_IDEA" ]; then
+                    echo -e "  ${YELLOW}↺${RESET} Empty input — back to menu"
+                    continue
+                fi
+                PY - <<PYEOF >/dev/null
+from lib.wishlist import add_unused
+add_unused("""$NEW_IDEA""")
+PYEOF
+                echo -e "  ${GREEN}✓${RESET} Added to wishlist: ${BOLD}$NEW_IDEA${RESET}"
+                continue
+                ;;
+            s|S)
+                SELECTED_MODE="surprise"
+                EXTRA_CONTEXT=""
+                echo -e "  ${GREEN}▶${RESET} Switched to surprise mode"
+
+                DOMAIN_PICK=$(PY - <<'PYEOF'
+from lib.paths import HISTORY_FILE, Config
+from lib.pick_domain import pick
+cfg = Config.load()
+p = pick(HISTORY_FILE, cfg)
+print(f"{p.key}|{p.label}|{p.reason}")
+PYEOF
+)
+                DOMAIN_LABEL=$(echo "$DOMAIN_PICK" | cut -d'|' -f2)
+                DOMAIN_REASON=$(echo "$DOMAIN_PICK" | cut -d'|' -f3)
+                echo -e "  ${CYAN}Domain:${RESET} $DOMAIN_LABEL"
+                echo -e "  ${DIM}  $DOMAIN_REASON${RESET}"
+                EXTRA_CONTEXT="DOMAIN: $DOMAIN_LABEL"
+                break
+                ;;
+            q|Q)
+                echo -e "  ${DIM}Bye.${RESET}"
+                exit 0
+                ;;
+            "")
+                echo -e "  ${YELLOW}↺${RESET} No input — back to menu"
+                continue
+                ;;
+            *)
+                SELECTED_LINE=$(echo "$ENTRIES" | awk -F'|' -v n="$WISH_INPUT" '$2 == n {print}')
+                if [ -z "$SELECTED_LINE" ]; then
+                    echo -e "  ${RED}✗${RESET} Invalid selection — try again"
+                    continue
+                fi
+
+                ENTRY_TYPE=$(echo "$SELECTED_LINE" | awk -F'|' '{print $1}')
+                ENTRY=$(echo "$SELECTED_LINE" | awk -F'|' '{ for (i=3; i<=NF; i++) printf "%s%s", $i, (i==NF?"":FS); print "" }')
+
+                if [ "$ENTRY_TYPE" = "c" ]; then
+                    EXTRA_CONTEXT="WISHLIST_ENTRY (curated): $ENTRY"
+                    echo -e "  ${GREEN}✓${RESET} Selected (curated): $ENTRY"
+                else
+                    # Mark the user's own entry as built immediately so it
+                    # doesn't get picked twice if the session is abandoned.
+                    # Curated picks live in curated.md and regenerate on the
+                    # next wishlist change anyway.
+                    PY - <<PYEOF >/dev/null
+from lib.wishlist import mark_built
+mark_built("""$ENTRY""")
+PYEOF
+                    EXTRA_CONTEXT="WISHLIST_ENTRY: $ENTRY"
+                    echo -e "  ${GREEN}✓${RESET} Selected: $ENTRY ${DIM}(moved to Used)${RESET}"
+                fi
+                break
+                ;;
+        esac
     done
-    echo ""
-    printf "  ${BOLD}Pick a number:${RESET} "
-    read -r WISH_NUM
-
-    ENTRY=$(echo "$ENTRIES" | awk -F'|' -v n="$WISH_NUM" '$1 == n {sub(/^[0-9]+\|/, ""); print}')
-    if [ -z "$ENTRY" ]; then
-        echo -e "  ${RED}✗${RESET} Invalid selection"
-        exit 1
-    fi
-    EXTRA_CONTEXT="WISHLIST_ENTRY: $ENTRY"
-    echo -e "  ${GREEN}✓${RESET} Selected: $ENTRY"
 fi
 
 # ── Generate project idea (with dedupe retries) ───────
@@ -430,7 +529,7 @@ different idea — different algorithm, different tech stack, different user."
 
     RAW_LOG="$DEBUG_DIR/generate_attempt_${ATTEMPT}.log"
     RAW_FILE="$DEBUG_DIR/generate_attempt_${ATTEMPT}.stdout"
-    IDEA_RAW=$(claude --dangerously-skip-permissions -p "$FULL_PROMPT" 2>"$RAW_LOG")
+    IDEA_RAW=$(claude --dangerously-skip-permissions --model "$CLAUDE_MODEL" -p "$FULL_PROMPT" 2>"$RAW_LOG")
     printf '%s' "$IDEA_RAW" > "$RAW_FILE"
 
     IDEA_JSON=$(RAW_FILE="$RAW_FILE" PY <<'PYEOF'
@@ -676,7 +775,7 @@ echo ""
 echo -e "  ${CYAN}────────────────────────────────────────${RESET}"
 echo ""
 
-claude --dangerously-skip-permissions
+claude --dangerously-skip-permissions --model "$CLAUDE_MODEL"
 
 # ── Post-session evaluation ───────────────────────────
 echo ""
