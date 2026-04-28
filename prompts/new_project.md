@@ -1,6 +1,10 @@
 # CRITICAL EXECUTION INSTRUCTIONS — READ BEFORE ANYTHING ELSE
 
-You are running as Claude Code (opus model). You must use the opus model for all thinking and execution.
+You are running as Claude Code on **Sonnet 4.6** as the orchestrator. Sonnet handles
+implementation directly; escalate to Opus only via `Task(subagent_type=...)` for
+architectural decisions, deep review, or hard reasoning. This is a deliberate
+cost/quality tradeoff — Sonnet is the recommended coding model and is ~5x cheaper
+than Opus while remaining excellent for the work in this template.
 
 ## How to work — non-negotiable
 
@@ -21,12 +25,13 @@ You are running as Claude Code (opus model). You must use the opus model for all
 - The code must actually run end to end before you consider the project complete.
 - README must be comprehensive and professional.
 
-## Model instruction
+## Model strategy
 
-Run this command before starting any work:
-```bash
-claude config set model claude-opus-4-6
-```
+The launcher (`start.sh`) starts you on Sonnet 4.6. Stay there.
+
+Use `Task(subagent_type=...)` to delegate to specialised agents (which may
+internally run on Opus or Haiku per their frontmatter). Do NOT change the
+session-wide model — delegate instead.
 
 ---
 
@@ -68,12 +73,35 @@ be proud to show a senior engineer at a company you want to work at.
 
 ---
 
-## MODEL
+## MANDATORY DELEGATION (cost + quality, no exceptions)
 
-You are running as Claude Opus. Before starting any work, confirm your model:
-```bash
-claude config set model claude-opus-4-6
-```
+Before writing implementation code, you MUST:
+
+1. **Plan via the `planner` agent** for the architecture/spec — do not
+   sketch architecture inline.
+2. **Use `Explore` agent** (not inline `Grep`/`Read` chains) for any
+   codebase question that would take more than 3 file reads.
+3. **After every meaningful change, invoke the appropriate `*-reviewer`
+   agent** — `typescript-reviewer`, `go-reviewer`, `cpp-reviewer`,
+   `python-reviewer`, `rust-reviewer`, `java-reviewer`, etc. — to catch
+   issues before they go upstream. Pick by the language of the changed
+   files.
+4. **`build-error-resolver`** owns build failures. Do not debug builds
+   inline.
+5. **`security-reviewer`** runs on auth, user input, secrets, and any
+   API surface — automatically, not on request.
+6. **Run agents in parallel** (single message, multiple `Agent` tool
+   calls) when their work is independent. Sequential agent runs waste
+   wall-clock time.
+
+Inline implementation is allowed only for:
+- Single-file edits under 30 lines
+- Operations with no matching specialised agent
+- Trivial config / scaffolding (writing `.gitignore`, package.json, etc.)
+
+The "did I just write 200 lines without delegating?" check happens
+before every commit. If yes, that change should have gone through a
+reviewer agent first.
 
 ---
 

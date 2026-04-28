@@ -29,3 +29,10 @@
 - Tech stack: Python 3.11, PyTorch, HuggingFace transformers, FastAPI, WebSockets, Vite, React, TypeScript, Three.js (react-three-fiber), D3.js, Zustand, Tailwind CSS
 - Status: COMPLETE
 - GitHub: https://github.com/rayancheca/circuit-trace
+
+2026-04-21 — heap-forge
+- Domain: Systems Programming and Low-Level CS
+- Description: Side-by-side benchmark and real-time fragmentation visualizer for custom memory allocators battling production workloads.
+- Tech stack: C11, Go (cgo), TypeScript, React, Vite, Tailwind CSS, gorilla/websocket
+- Status: COMPLETE
+- GitHub: https://github.com/rayancheca/heap-forge
