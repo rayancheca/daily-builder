@@ -768,13 +768,27 @@ _WISHLIST_USED_RE = re.compile(
 )
 
 
+CURATED_FILE = os.path.expanduser("~/daily-builder/curated.md")
+
+
+def _read_curated():
+    if not os.path.isfile(CURATED_FILE):
+        return []
+    try:
+        text = Path(CURATED_FILE).read_text(encoding='utf-8')
+    except OSError:
+        return []
+    items = re.findall(r'^- \[ \]\s+(.+)$', text, re.MULTILINE)
+    return [i.strip() for i in items if i.strip() and 'add your own' not in i.lower()]
+
+
 def _read_wishlist():
     if not os.path.isfile(WISHLIST_FILE):
-        return {'unused': [], 'used': []}
+        return {'unused': [], 'used': [], 'curated': _read_curated()}
     try:
         content = Path(WISHLIST_FILE).read_text(encoding='utf-8')
     except OSError:
-        return {'unused': [], 'used': []}
+        return {'unused': [], 'used': [], 'curated': _read_curated()}
 
     unused_match = _WISHLIST_UNUSED_RE.search(content)
     used_match = _WISHLIST_USED_RE.search(content)
@@ -793,7 +807,7 @@ def _read_wishlist():
         used_match.group(2) if used_match else '',
         r'^- \[x\]\s+(.+)$',
     )
-    return {'unused': unused, 'used': used}
+    return {'unused': unused, 'used': used, 'curated': _read_curated()}
 
 
 def _wishlist_add(item: str) -> None:

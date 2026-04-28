@@ -103,7 +103,7 @@ function setLive(on) {
   if (!pill) return;
   if (on) pill.classList.remove('offline');
   else pill.classList.add('offline');
-  $('#live-text').textContent = on ? 'LIVE' : 'OFFLINE';
+  $('#live-text').textContent = on ? 'BUILDING' : 'IDLE';
 }
 
 // === Render ===
@@ -1833,3 +1833,325 @@ window.openDayDetail = openDayDetail;
 init();
 setupDrawerScroll();
 setupScrollReveal();
+
+/* ============================================================ */
+/* === HF v2: rail nav, persistent reveal, tilt, ripple,  === */
+/* ===        number ticker, wishlist counts, drag       === */
+/* ============================================================ */
+
+(() => {
+  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // === A. Section rail navigation ============================
+  const railBtns = Array.from(document.querySelectorAll('.rail-btn[data-target]'));
+  const railIndicator = document.getElementById('rail-indicator');
+  const sections = railBtns.map(b => document.getElementById(b.dataset.target)).filter(Boolean);
+
+  function moveIndicator(btn) {
+    if (!railIndicator || !btn) return;
+    const top = btn.offsetTop;
+    const height = btn.offsetHeight;
+    railIndicator.style.top = `${top + 6}px`;
+    railIndicator.style.height = `${height - 12}px`;
+    railIndicator.classList.add('show');
+  }
+
+  function setActiveRail(targetId, scroll = true) {
+    railBtns.forEach(b => {
+      const on = b.dataset.target === targetId;
+      b.classList.toggle('active', on);
+      if (on) moveIndicator(b);
+    });
+    if (scroll) {
+      const target = document.getElementById(targetId);
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
+
+  railBtns.forEach(btn => {
+    btn.addEventListener('click', () => setActiveRail(btn.dataset.target));
+  });
+
+  // === B. Scroll-driven section tracking + persistent reveal =
+  const revealTargets = document.querySelectorAll('.tile, .stat-card, .hero-main, .section-head');
+  revealTargets.forEach(el => el.classList.add('reveal'));
+
+  if (!prefersReducedMotion && 'IntersectionObserver' in window) {
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (e.isIntersecting) {
+          e.target.classList.add('in');
+          e.target.classList.remove('out');
+        } else if (e.boundingClientRect.top > 0) {
+          // Scrolled past below-the-fold — keep "out" so re-entry plays again.
+          e.target.classList.remove('in');
+          e.target.classList.add('out');
+        }
+        // We deliberately don't toggle "out" when scrolling above viewport;
+        // that way reading flow upward isn't strobing animations.
+      }
+    }, { threshold: [0, 0.12], rootMargin: '0px 0px -10% 0px' });
+    revealTargets.forEach(el => io.observe(el));
+  } else {
+    revealTargets.forEach(el => el.classList.add('in'));
+  }
+
+  // Section-in-view tracker for the rail
+  if (sections.length) {
+    const sio = new IntersectionObserver((entries) => {
+      // Pick the entry with the largest intersection ratio.
+      let best = null;
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        if (!best || e.intersectionRatio > best.intersectionRatio) best = e;
+      }
+      if (best) setActiveRail(best.target.id, false);
+    }, { threshold: [0.2, 0.4, 0.6], rootMargin: '-80px 0px -40% 0px' });
+    sections.forEach(s => sio.observe(s));
+    // Initial position
+    if (railBtns[0]) requestAnimationFrame(() => moveIndicator(railBtns[0]));
+  }
+
+  // === C. 3D tilt + spotlight follow =========================
+  const tiltEls = document.querySelectorAll('[data-tilt]');
+  const TILT_MAX = 6; // degrees
+
+  function attachTilt(el) {
+    if (prefersReducedMotion) return;
+    el.addEventListener('pointermove', (ev) => {
+      if (el.classList.contains('dragging')) return;
+      const r = el.getBoundingClientRect();
+      const px = (ev.clientX - r.left) / r.width;
+      const py = (ev.clientY - r.top) / r.height;
+      const rx = (0.5 - py) * 2 * TILT_MAX;
+      const ry = (px - 0.5) * 2 * TILT_MAX;
+      el.style.setProperty('--mx', `${px * 100}%`);
+      el.style.setProperty('--my', `${py * 100}%`);
+      el.style.setProperty('--tilt-x', `${rx}deg`);
+      el.style.setProperty('--tilt-y', `${ry}deg`);
+    });
+    el.addEventListener('pointerleave', () => {
+      el.style.setProperty('--tilt-x', '0deg');
+      el.style.setProperty('--tilt-y', '0deg');
+    });
+  }
+  tiltEls.forEach(attachTilt);
+
+  // === D. Click ripple ========================================
+  function attachRipple(el) {
+    el.addEventListener('pointerdown', (ev) => {
+      if (el.classList.contains('dragging')) return;
+      const r = el.getBoundingClientRect();
+      const x = ev.clientX - r.left;
+      const y = ev.clientY - r.top;
+      const size = Math.max(r.width, r.height) * 0.4;
+      const ripple = document.createElement('span');
+      ripple.className = 'ripple';
+      ripple.style.left = `${x}px`;
+      ripple.style.top = `${y}px`;
+      ripple.style.width = `${size}px`;
+      ripple.style.height = `${size}px`;
+      el.appendChild(ripple);
+      // overflow:hidden via tile already; for stat-card add it
+      el.style.overflow = el.style.overflow || 'hidden';
+      setTimeout(() => ripple.remove(), 700);
+    });
+  }
+  document.querySelectorAll('.tile, .stat-card, .hero-main').forEach(attachRipple);
+
+  // === E. Number ticker for stat values =======================
+  // Animate from previous numeric value to new one with eased interp.
+  // Set a `_ticking` flag while animating so the MutationObserver below
+  // ignores our own intermediate writes (otherwise rolling numbers look
+  // like new targets and the ticker recurses to 0).
+  const tickedEls = new WeakMap();
+  function tickTo(el, target) {
+    const raw = (target == null) ? '0' : String(target);
+    const numMatch = raw.replace(/,/g, '').match(/-?\d+(\.\d+)?/);
+    if (!numMatch) {
+      el._ticking = true; el.textContent = raw; el._ticking = false;
+      return;
+    }
+    const goal = parseFloat(numMatch[0]);
+    const prev = tickedEls.get(el) || 0;
+    if (goal === prev) {
+      el._ticking = true; el.textContent = raw; el._ticking = false;
+      return;
+    }
+    if (prefersReducedMotion) {
+      el._ticking = true; el.textContent = raw; el._ticking = false;
+      tickedEls.set(el, goal);
+      return;
+    }
+    const start = performance.now();
+    const dur = 900;
+    const isInt = !raw.includes('.');
+    el.classList.add('flash');
+    el._ticking = true;
+    const tick = (now) => {
+      const t = Math.min(1, (now - start) / dur);
+      const eased = 1 - Math.pow(1 - t, 3);
+      const cur = prev + (goal - prev) * eased;
+      el.textContent = isInt ? Math.round(cur).toLocaleString() : cur.toFixed(1);
+      if (t < 1) requestAnimationFrame(tick);
+      else {
+        el.textContent = raw;
+        el._ticking = false;
+        tickedEls.set(el, goal);
+        setTimeout(() => el.classList.remove('flash'), 800);
+      }
+    };
+    requestAnimationFrame(tick);
+  }
+
+  // Watch the existing render() path which writes textContent directly,
+  // and route those updates through the ticker. Skip intermediate
+  // writes the ticker itself produced. Wishlist counts call tickTo
+  // explicitly from loadWishlistCounts() — they don't need the observer.
+  const tickerTargets = ['stat-streak', 'stat-completed', 'stat-projects', 'stat-commits', 'stat-additions'];
+  tickerTargets.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    let last = el.textContent;
+    const mo = new MutationObserver(() => {
+      if (el._ticking) return;
+      const v = el.textContent;
+      if (v === last || v === '—') return;
+      last = v;
+      tickTo(el, v);
+    });
+    mo.observe(el, { childList: true, characterData: true, subtree: true });
+  });
+
+  // === F. Wishlist counts + preview ===========================
+  async function loadWishlistCounts() {
+    try {
+      const r = await fetch('/api/wishlist', { cache: 'no-store' });
+      if (!r.ok) return;
+      const d = await r.json();
+      const unused = (d.unused || []).length;
+      const used = (d.used || []).length;
+      const curated = (d.curated || []).length;
+      const setNum = (id, n) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        tickTo(el, String(n));
+      };
+      setNum('wcount-unused', unused);
+      setNum('wcount-used', used);
+      setNum('wcount-curated', curated);
+
+      const preview = document.getElementById('wishlist-preview');
+      if (preview) {
+        const items = [];
+        (d.unused || []).slice(0, 3).forEach(t => items.push({ kind: 'unused', text: t }));
+        (d.curated || []).slice(0, 3).forEach(t => items.push({ kind: 'curated', text: t }));
+        preview.innerHTML = items.length
+          ? items.map(it =>
+              `<div class="wishlist-preview-item ${it.kind}"><span class="dot"></span>${escapeHtml(it.text)}</div>`
+            ).join('')
+          : '<div class="wishlist-preview-item"><span class="dot" style="background:var(--text3)"></span>Wishlist is empty — open to add an idea.</div>';
+      }
+    } catch (e) { /* non-fatal */ }
+  }
+  loadWishlistCounts();
+  setInterval(loadWishlistCounts, 15000);
+
+  // Refresh after add/remove via existing wishlist drawer.
+  const origRefreshWishlist = window.refreshWishlist;
+  if (typeof origRefreshWishlist === 'function') {
+    window.refreshWishlist = async function() {
+      await origRefreshWishlist.apply(this, arguments);
+      loadWishlistCounts();
+    };
+  }
+
+  // Helper escape (the existing app.js has one, but we make sure we have one here)
+  function escapeHtml(s) {
+    const map = {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'};
+    return String(s).replace(/[&<>"']/g, c => map[c]);
+  }
+
+  // === G. Drag-to-reorder with FLIP + magnetic neighbors ======
+  let dragging = null;
+  let dragStart = null;
+  let dragOffset = null;
+  let lastNeighbors = new Set();
+
+  function onPointerDown(ev) {
+    if (!document.body.classList.contains('playmode')) return;
+    const tile = ev.currentTarget;
+    if (ev.target.closest('button, a, input, select, textarea, .filter-pill, .sort-control, kbd')) return;
+    dragging = tile;
+    const r = tile.getBoundingClientRect();
+    dragStart = { x: ev.clientX, y: ev.clientY };
+    dragOffset = { x: ev.clientX - r.left, y: ev.clientY - r.top, w: r.width, h: r.height };
+    tile.classList.add('dragging');
+    tile.style.position = 'relative';
+    tile.setPointerCapture(ev.pointerId);
+    ev.preventDefault();
+  }
+  function onPointerMove(ev) {
+    if (!dragging) return;
+    const dx = ev.clientX - dragStart.x;
+    const dy = ev.clientY - dragStart.y;
+    dragging.style.transform = `translate(${dx}px, ${dy}px) scale(1.04) rotate(${dx * 0.02}deg)`;
+
+    // Magnetic lean on neighbors within 200px
+    const draggedRect = dragging.getBoundingClientRect();
+    const draggedCenter = {
+      x: draggedRect.left + draggedRect.width / 2,
+      y: draggedRect.top + draggedRect.height / 2,
+    };
+    const newNeighbors = new Set();
+    document.querySelectorAll('[data-tilt]').forEach(other => {
+      if (other === dragging) return;
+      const r = other.getBoundingClientRect();
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      const dist = Math.hypot(cx - draggedCenter.x, cy - draggedCenter.y);
+      if (dist < 280) {
+        newNeighbors.add(other);
+        const sign = cx < draggedCenter.x ? 'lean-left' : 'lean-right';
+        other.classList.add(sign);
+        other.classList.remove(sign === 'lean-left' ? 'lean-right' : 'lean-left');
+      }
+    });
+    // Clear old neighbors that are no longer near
+    lastNeighbors.forEach(n => {
+      if (!newNeighbors.has(n)) n.classList.remove('lean-left', 'lean-right');
+    });
+    lastNeighbors = newNeighbors;
+  }
+  function onPointerUp() {
+    if (!dragging) return;
+    const tile = dragging;
+    // Spring-back animation
+    tile.style.transition = 'transform 520ms cubic-bezier(0.16, 1, 0.3, 1)';
+    tile.style.transform = '';
+    setTimeout(() => {
+      tile.style.transition = '';
+      tile.style.position = '';
+    }, 540);
+    tile.classList.remove('dragging');
+    lastNeighbors.forEach(n => n.classList.remove('lean-left', 'lean-right'));
+    lastNeighbors = new Set();
+    dragging = null;
+  }
+
+  document.querySelectorAll('[data-tilt]').forEach(tile => {
+    tile.addEventListener('pointerdown', onPointerDown);
+    tile.addEventListener('pointermove', onPointerMove);
+    tile.addEventListener('pointerup', onPointerUp);
+    tile.addEventListener('pointercancel', onPointerUp);
+  });
+
+  // === H. Playful mode toggle =================================
+  const playToggle = document.getElementById('playmode-toggle');
+  if (playToggle) {
+    playToggle.addEventListener('click', () => {
+      document.body.classList.toggle('playmode');
+      playToggle.classList.toggle('active');
+    });
+  }
+})();

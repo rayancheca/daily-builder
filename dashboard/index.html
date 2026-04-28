@@ -28,7 +28,7 @@
         </div>
         <div class="live-pill" id="live-pill">
           <div class="live-dot"></div>
-          <span id="live-text">CONNECTING</span>
+          <span id="live-text">IDLE</span>
         </div>
         <button class="icon-btn" onclick="openWishlist()" title="Wishlist">★</button>
         <button class="icon-btn" onclick="reconnect()" title="Reconnect">↻</button>
@@ -39,130 +39,247 @@
       <div class="ticker-inner" id="ticker-inner"></div>
     </div>
 
-    <main>
-      <section class="hero-row span-12">
-        <div class="hero-main" id="hero-main">
-          <div class="skel" style="height: 200px; border-radius: 16px;"></div>
-        </div>
-        <div class="stat-card" id="stat-streak-card">
-          <div class="stat-icon">◆</div>
-          <div class="stat-label">Streak</div>
-          <div class="stat-value accent" id="stat-streak">—</div>
-          <div class="stat-delta">days in a row</div>
-        </div>
-        <div class="stat-card" id="stat-shipped-card">
-          <div class="stat-icon">✓</div>
-          <div class="stat-label">Shipped</div>
-          <div class="stat-value" id="stat-completed">—</div>
-          <div class="stat-delta">of <span id="stat-projects">0</span> projects</div>
-        </div>
-        <div class="stat-card" id="stat-commits-card">
-          <div class="stat-icon">⎇</div>
-          <div class="stat-label">Total Commits</div>
-          <div class="stat-value" id="stat-commits">—</div>
-          <div class="stat-delta"><span id="stat-additions">0</span> lines added</div>
-        </div>
-      </section>
+    <div class="layout-shell">
+      <aside class="section-rail" aria-label="Section navigation">
+        <button class="rail-btn active" data-target="sec-overview" data-label="Overview">
+          <span class="rail-glyph">◇</span>
+          <span class="rail-text">Overview</span>
+        </button>
+        <button class="rail-btn" data-target="sec-activity" data-label="Activity">
+          <span class="rail-glyph">▦</span>
+          <span class="rail-text">Activity</span>
+        </button>
+        <button class="rail-btn" data-target="sec-projects" data-label="Projects">
+          <span class="rail-glyph">◫</span>
+          <span class="rail-text">Projects</span>
+        </button>
+        <button class="rail-btn" data-target="sec-wishlist" data-label="Wishlist">
+          <span class="rail-glyph">★</span>
+          <span class="rail-text">Wishlist</span>
+        </button>
+        <button class="rail-btn" data-target="sec-log" data-label="Log">
+          <span class="rail-glyph">≡</span>
+          <span class="rail-text">Log</span>
+        </button>
+        <div class="rail-indicator" id="rail-indicator"></div>
+        <div class="rail-divider"></div>
+        <button class="rail-btn rail-mode-toggle" id="playmode-toggle" data-label="Playful">
+          <span class="rail-glyph">◐</span>
+          <span class="rail-text">Playful</span>
+        </button>
+      </aside>
 
-      <section class="tile span-4" id="quota-tile">
-        <div class="tile-header">
-          <div class="tile-title">Max Quota · 7d</div>
-          <div class="tile-sub">loading…</div>
-        </div>
-      </section>
-
-      <section class="tile span-8">
-        <div class="tile-header">
-          <div class="tile-title">Activity Calendar · 365 days</div>
-          <div class="tile-sub" id="cal-summary"></div>
-        </div>
-        <div class="calendar-wrap">
-          <div class="cal-month-labels" id="cal-months"></div>
-          <div class="calendar" id="calendar"></div>
-        </div>
-        <div class="cal-legend">
-          <span>Less</span>
-          <div class="cal-day"></div>
-          <div class="cal-day l1"></div>
-          <div class="cal-day l2"></div>
-          <div class="cal-day l3"></div>
-          <div class="cal-day l4"></div>
-          <span>More</span>
-        </div>
-      </section>
-
-      <section class="tile span-4">
-        <div class="tile-header">
-          <div class="tile-title">Languages</div>
-          <div class="tile-sub" id="lang-summary"></div>
-        </div>
-        <div class="chart-wrap">
-          <canvas id="chart-lang"></canvas>
-        </div>
-      </section>
-
-      <section class="tile span-8">
-        <div class="tile-header">
-          <div class="tile-title">Velocity · last 30 days</div>
-          <div class="tile-sub" id="vel-summary"></div>
-        </div>
-        <div class="chart-wrap">
-          <canvas id="chart-velocity"></canvas>
-        </div>
-      </section>
-
-      <section class="tile span-4">
-        <div class="tile-header">
-          <div class="tile-title">When you build</div>
-          <div class="tile-sub">commits by hour × day</div>
-        </div>
-        <div class="heatmap-wrap">
-          <div class="heatmap" id="heatmap"></div>
-          <div class="hm-labels">
-            <span>00</span><span>06</span><span>12</span><span>18</span><span>24</span>
+      <main class="layout-main">
+        <section class="dash-section" id="sec-overview" data-section-label="Overview">
+          <header class="section-head">
+            <div>
+              <div class="section-eyebrow">01 · Mission status</div>
+              <h2 class="section-title">Overview</h2>
+            </div>
+            <div class="section-line"></div>
+          </header>
+          <div class="grid-row">
+            <div class="hero-main span-12" id="hero-main" data-tilt>
+              <div class="skel" style="height: 200px; border-radius: 16px;"></div>
+            </div>
           </div>
-        </div>
-      </section>
-
-      <section class="tile span-8">
-        <div class="tile-header">
-          <div class="tile-title">All Projects</div>
-          <div class="tile-sub" id="proj-count"></div>
-        </div>
-        <div class="proj-controls">
-          <div class="filter-pills" id="status-filter">
-            <button class="filter-pill active" data-status="all">All</button>
-            <button class="filter-pill" data-status="building">Building</button>
-            <button class="filter-pill" data-status="shipped">Shipped</button>
-            <button class="filter-pill" data-status="stalled">Stalled</button>
+          <div class="grid-row" style="margin-top: 20px">
+            <div class="stat-card span-4" id="stat-streak-card" data-tilt>
+              <div class="stat-icon">◆</div>
+              <div class="stat-label">Streak</div>
+              <div class="stat-value accent" id="stat-streak">—</div>
+              <div class="stat-delta">days in a row</div>
+            </div>
+            <div class="stat-card span-4" id="stat-shipped-card" data-tilt>
+              <div class="stat-icon">✓</div>
+              <div class="stat-label">Shipped</div>
+              <div class="stat-value" id="stat-completed">—</div>
+              <div class="stat-delta">of <span id="stat-projects">0</span> projects</div>
+            </div>
+            <div class="stat-card span-4" id="stat-commits-card" data-tilt>
+              <div class="stat-icon">⎇</div>
+              <div class="stat-label">Total Commits</div>
+              <div class="stat-value" id="stat-commits">—</div>
+              <div class="stat-delta"><span id="stat-additions">0</span> lines added</div>
+            </div>
           </div>
-          <div class="sort-control">
-            <span class="sort-label">Sort</span>
-            <select id="sort-select">
-              <option value="recent">Most recent</option>
-              <option value="commits">Most commits</option>
-              <option value="lines">Most lines</option>
-              <option value="name">Alphabetical</option>
-            </select>
+        </section>
+
+        <section class="dash-section" id="sec-activity" data-section-label="Activity">
+          <header class="section-head">
+            <div>
+              <div class="section-eyebrow">02 · Cadence</div>
+              <h2 class="section-title">Activity</h2>
+            </div>
+            <div class="section-line"></div>
+          </header>
+          <div class="grid-row">
+            <section class="tile span-4" id="quota-tile" data-tilt>
+              <div class="tile-header">
+                <div class="tile-title">Max Quota · 7d</div>
+                <div class="tile-sub">loading…</div>
+              </div>
+            </section>
+
+            <section class="tile span-8" data-tilt>
+              <div class="tile-header">
+                <div class="tile-title">Activity Calendar · 365 days</div>
+                <div class="tile-sub" id="cal-summary"></div>
+              </div>
+              <div class="calendar-wrap">
+                <div class="cal-month-labels" id="cal-months"></div>
+                <div class="calendar" id="calendar"></div>
+              </div>
+              <div class="cal-legend">
+                <span>Less</span>
+                <div class="cal-day"></div>
+                <div class="cal-day l1"></div>
+                <div class="cal-day l2"></div>
+                <div class="cal-day l3"></div>
+                <div class="cal-day l4"></div>
+                <span>More</span>
+              </div>
+            </section>
+
+            <section class="tile span-4" data-tilt>
+              <div class="tile-header">
+                <div class="tile-title">Languages</div>
+                <div class="tile-sub" id="lang-summary"></div>
+              </div>
+              <div class="chart-wrap">
+                <canvas id="chart-lang"></canvas>
+              </div>
+            </section>
+
+            <section class="tile span-8" data-tilt>
+              <div class="tile-header">
+                <div class="tile-title">Velocity · last 30 days</div>
+                <div class="tile-sub" id="vel-summary"></div>
+              </div>
+              <div class="chart-wrap">
+                <canvas id="chart-velocity"></canvas>
+              </div>
+            </section>
+
+            <section class="tile span-4" data-tilt>
+              <div class="tile-header">
+                <div class="tile-title">When you build</div>
+                <div class="tile-sub">commits by hour × day</div>
+              </div>
+              <div class="heatmap-wrap">
+                <div class="heatmap" id="heatmap"></div>
+                <div class="hm-labels">
+                  <span>00</span><span>06</span><span>12</span><span>18</span><span>24</span>
+                </div>
+              </div>
+            </section>
+
+            <section class="tile span-8" data-tilt>
+              <div class="tile-header">
+                <div class="tile-title">Recent Commits</div>
+              </div>
+              <div class="feed" id="commit-feed"></div>
+            </section>
           </div>
-        </div>
-        <div class="project-grid" id="project-grid"></div>
-      </section>
+        </section>
 
-      <section class="tile span-4">
-        <div class="tile-header">
-          <div class="tile-title">Recent Commits</div>
-        </div>
-        <div class="feed" id="commit-feed"></div>
-      </section>
+        <section class="dash-section" id="sec-projects" data-section-label="Projects">
+          <header class="section-head">
+            <div>
+              <div class="section-eyebrow">03 · Portfolio</div>
+              <h2 class="section-title">Projects</h2>
+            </div>
+            <div class="section-line"></div>
+          </header>
+          <div class="grid-row">
+            <section class="tile span-12" data-tilt>
+              <div class="tile-header">
+                <div class="tile-title">All Projects</div>
+                <div class="tile-sub" id="proj-count"></div>
+              </div>
+              <div class="proj-controls">
+                <div class="filter-pills" id="status-filter">
+                  <button class="filter-pill active" data-status="all">All</button>
+                  <button class="filter-pill" data-status="building">Building</button>
+                  <button class="filter-pill" data-status="shipped">Shipped</button>
+                  <button class="filter-pill" data-status="stalled">Stalled</button>
+                </div>
+                <div class="sort-control">
+                  <span class="sort-label">Sort</span>
+                  <select id="sort-select">
+                    <option value="recent">Most recent</option>
+                    <option value="commits">Most commits</option>
+                    <option value="lines">Most lines</option>
+                    <option value="name">Alphabetical</option>
+                  </select>
+                </div>
+              </div>
+              <div class="project-grid" id="project-grid"></div>
+            </section>
+          </div>
+        </section>
 
-      <section class="tile span-12">
-        <div class="tile-header">
-          <div class="tile-title">Session Log</div>
-        </div>
-        <div class="session-log" id="session-log"></div>
-      </section>
-    </main>
+        <section class="dash-section" id="sec-wishlist" data-section-label="Wishlist">
+          <header class="section-head">
+            <div>
+              <div class="section-eyebrow">04 · Backlog</div>
+              <h2 class="section-title">Wishlist</h2>
+            </div>
+            <div class="section-line"></div>
+          </header>
+          <div class="grid-row">
+            <section class="tile span-12 wishlist-overview" id="wishlist-tile"
+                     onclick="openWishlist()" data-tilt>
+              <div class="tile-header">
+                <div>
+                  <div class="tile-title">Project Wishlist</div>
+                  <div class="tile-sub">Click anywhere to open · ideas + AI-curated alternates</div>
+                </div>
+                <div class="wishlist-cta">
+                  <span class="wishlist-cta-text">Manage</span>
+                  <span class="wishlist-cta-arrow">→</span>
+                </div>
+              </div>
+              <div class="wishlist-counts">
+                <div class="wcount wcount-unused">
+                  <div class="wcount-label">Unused</div>
+                  <div class="wcount-value" id="wcount-unused">—</div>
+                  <div class="wcount-sub">ready to pick</div>
+                </div>
+                <div class="wcount-sep"></div>
+                <div class="wcount wcount-built">
+                  <div class="wcount-label">Built</div>
+                  <div class="wcount-value" id="wcount-used">—</div>
+                  <div class="wcount-sub">already shipped</div>
+                </div>
+                <div class="wcount-sep"></div>
+                <div class="wcount wcount-curated">
+                  <div class="wcount-label">Curated</div>
+                  <div class="wcount-value" id="wcount-curated">—</div>
+                  <div class="wcount-sub">AI alternates</div>
+                </div>
+              </div>
+              <div class="wishlist-preview" id="wishlist-preview"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="dash-section" id="sec-log" data-section-label="Log">
+          <header class="section-head">
+            <div>
+              <div class="section-eyebrow">05 · Telemetry</div>
+              <h2 class="section-title">Session Log</h2>
+            </div>
+            <div class="section-line"></div>
+          </header>
+          <div class="grid-row">
+            <section class="tile span-12" data-tilt>
+              <div class="session-log" id="session-log"></div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
 
     <div class="scrim" id="scrim" onclick="closeDrawer()"></div>
     <aside class="drawer" id="drawer" role="dialog" aria-modal="true">
