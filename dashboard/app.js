@@ -556,12 +556,16 @@ async function openDrawer(name) {
   `;
   try {
     const r = await fetch(`/api/project?name=${encodeURIComponent(name)}`);
-    if (!r.ok) throw new Error();
+    if (!r.ok) throw new Error(`fetch returned ${r.status}`);
     const data = await r.json();
     state.projectCache[name] = data;
     renderDrawer(data);
-  } catch {
-    $('#drawer-body').innerHTML = '<div style="color:var(--red); padding: 20px;">Failed to load project details</div>';
+  } catch (err) {
+    console.error('[drawer] failed to load', name, err);
+    $('#drawer-body').innerHTML = `<div style="color:var(--red); padding: 20px;">
+      <div style="font-weight:700;margin-bottom:6px">Failed to load project details</div>
+      <div style="font-family:var(--font-mono);font-size:11px;color:var(--text2);white-space:pre-wrap">${escapeHtml(String(err && err.stack || err))}</div>
+    </div>`;
   }
 }
 
@@ -1860,7 +1864,12 @@ setupScrollReveal();
     railBtns.forEach(b => {
       const on = b.dataset.target === targetId;
       b.classList.toggle('active', on);
-      if (on) moveIndicator(b);
+      if (on) {
+        b.setAttribute('aria-current', 'page');
+        moveIndicator(b);
+      } else {
+        b.removeAttribute('aria-current');
+      }
     });
     if (scroll) {
       const target = document.getElementById(targetId);
@@ -2044,13 +2053,47 @@ setupScrollReveal();
       const preview = document.getElementById('wishlist-preview');
       if (preview) {
         const items = [];
-        (d.unused || []).slice(0, 3).forEach(t => items.push({ kind: 'unused', text: t }));
-        (d.curated || []).slice(0, 3).forEach(t => items.push({ kind: 'curated', text: t }));
+        (d.unused || []).slice(0, 4).forEach(t => items.push({ kind: 'unused', text: t }));
+        (d.curated || []).slice(0, 6).forEach(t => items.push({ kind: 'curated', text: t }));
+
+        // Pull a short lead (≤ 60 chars or up to first ":" / "." / "—")
+        // so the eye catches the IDEA before the prose. Helps the long
+        // ones (LLM-generated 6-sentence blocks) read like cards instead
+        // of paragraphs.
+        const splitLead = (text) => {
+          const trimmed = String(text || '').trim();
+          if (!trimmed) return { lead: '', rest: '' };
+          // Strip a leading "1. " / "- " enumeration if present
+          const cleaned = trimmed.replace(/^\s*(?:\d+\.\s*|[-*•]\s*)/, '');
+          const m = cleaned.match(/^([^.:—\n]{4,80})\s*[.:—]\s+(.+)$/s);
+          if (m) return { lead: m[1].trim(), rest: m[2].trim() };
+          if (cleaned.length <= 80) return { lead: cleaned, rest: '' };
+          return { lead: cleaned.slice(0, 70).trim() + '…', rest: cleaned.slice(70).trim() };
+        };
+
         preview.innerHTML = items.length
-          ? items.map(it =>
-              `<div class="wishlist-preview-item ${it.kind}"><span class="dot"></span>${escapeHtml(it.text)}</div>`
-            ).join('')
-          : '<div class="wishlist-preview-item"><span class="dot" style="background:var(--text3)"></span>Wishlist is empty — open to add an idea.</div>';
+          ? items.map(it => {
+              const { lead, rest } = splitLead(it.text);
+              return `<div class="wishlist-preview-item ${it.kind}" title="${escapeAttr(it.text)}">
+                <span class="dot"></span>
+                <div class="body">
+                  ${lead ? `<span class="lead">${escapeHtml(lead)}</span>` : ''}
+                  ${rest ? escapeHtml(rest) : ''}
+                </div>
+              </div>`;
+            }).join('')
+          : '<div class="wishlist-preview-item"><span class="dot" style="background:var(--text3)"></span><div class="body">Wishlist is empty — click to add an idea.</div></div>';
+
+        // Mark cards whose body actually overflowed (clamping kicked in)
+        // so the fade-gradient only appears when there's hidden content.
+        requestAnimationFrame(() => {
+          preview.querySelectorAll('.wishlist-preview-item').forEach(card => {
+            const body = card.querySelector('.body');
+            if (body && body.scrollHeight > body.clientHeight + 1) {
+              card.classList.add('is-clamped');
+            }
+          });
+        });
       }
     } catch (e) { /* non-fatal */ }
   }
@@ -2073,9 +2116,14 @@ setupScrollReveal();
   }
 
   // === G. Drag-to-reorder with FLIP + magnetic neighbors ======
+  // didDrag is checked by the global capture-phase click suppressor below
+  // so dropping a card does NOT also fire its click handler (open drawer).
+  // A clean click without movement leaves didDrag false → click goes through.
+  const DRAG_THRESHOLD = 6; // px
   let dragging = null;
   let dragStart = null;
   let dragOffset = null;
+  let didDrag = false;
   let lastNeighbors = new Set();
 
   function onPointerDown(ev) {
@@ -2083,6 +2131,7 @@ setupScrollReveal();
     const tile = ev.currentTarget;
     if (ev.target.closest('button, a, input, select, textarea, .filter-pill, .sort-control, kbd')) return;
     dragging = tile;
+    didDrag = false;
     const r = tile.getBoundingClientRect();
     dragStart = { x: ev.clientX, y: ev.clientY };
     dragOffset = { x: ev.clientX - r.left, y: ev.clientY - r.top, w: r.width, h: r.height };
@@ -2095,6 +2144,9 @@ setupScrollReveal();
     if (!dragging) return;
     const dx = ev.clientX - dragStart.x;
     const dy = ev.clientY - dragStart.y;
+    if (!didDrag && Math.hypot(dx, dy) > DRAG_THRESHOLD) {
+      didDrag = true;
+    }
     dragging.style.transform = `translate(${dx}px, ${dy}px) scale(1.04) rotate(${dx * 0.02}deg)`;
 
     // Magnetic lean on neighbors within 200px
@@ -2137,6 +2189,12 @@ setupScrollReveal();
     lastNeighbors.forEach(n => n.classList.remove('lean-left', 'lean-right'));
     lastNeighbors = new Set();
     dragging = null;
+    // didDrag stays true through the synthesized click that follows
+    // pointerup. Reset on the next macrotask so future clicks aren't
+    // permanently suppressed.
+    if (didDrag) {
+      setTimeout(() => { didDrag = false; }, 0);
+    }
   }
 
   document.querySelectorAll('[data-tilt]').forEach(tile => {
@@ -2145,6 +2203,16 @@ setupScrollReveal();
     tile.addEventListener('pointerup', onPointerUp);
     tile.addEventListener('pointercancel', onPointerUp);
   });
+
+  // Capture-phase click suppressor: kills the synthesized click that
+  // follows a drag-then-release on the same element. Pure clicks
+  // (no movement) leave didDrag false and pass through untouched.
+  document.addEventListener('click', (ev) => {
+    if (didDrag) {
+      ev.stopPropagation();
+      ev.preventDefault();
+    }
+  }, true);
 
   // === H. Playful mode toggle =================================
   const playToggle = document.getElementById('playmode-toggle');

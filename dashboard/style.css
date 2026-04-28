@@ -50,7 +50,12 @@ html, body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   min-height: 100vh;
-  overflow-x: hidden;
+  /* `overflow-x: hidden` implicitly forces `overflow-y: auto`, which
+     creates a new scroll container and breaks `position: sticky` on
+     all descendants (including the section rail). `overflow: clip`
+     prevents horizontal overflow without establishing a scroll
+     context, so sticky keeps working. */
+  overflow-x: clip;
 }
 
 body::before {
@@ -423,13 +428,24 @@ main {
   transform: translateY(-2px);
   box-shadow: 0 12px 32px rgba(0,0,0,.4);
 }
+/* Stat-card header — small badge + label sit on one row.
+   Note: ancestor rule `[data-tilt] > * { position: relative }` (line ~3059)
+   forces relative on direct children, so absolute floaters on the icon
+   were colliding with the label. The badge-on-a-row layout sidesteps
+   that override entirely. */
+.stat-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
 .stat-icon {
-  position: absolute;
-  top: 18px; right: 18px;
+  flex: 0 0 auto;
   width: 28px; height: 28px;
   display: grid;
   place-items: center;
   background: var(--bg3);
+  border: 1px solid oklch(100% 0 0 / 0.04);
   border-radius: 8px;
   font-size: 13px;
   color: var(--text2);
@@ -438,7 +454,7 @@ main {
   font-family: var(--font-mono);
   font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.14em;
   color: var(--text2);
 }
 .stat-value {
@@ -2805,7 +2821,11 @@ body::after {
   display: grid;
   grid-template-columns: 88px 1fr;
   gap: 0;
-  align-items: start;
+  /* Default `align-items: stretch` is required so the rail's grid cell
+     stretches the full scrolled height, giving `position: sticky` a
+     scroll context. Setting `start` here collapses the cell to the
+     rail's own height and breaks sticky in every browser. */
+  align-items: stretch;
   min-height: calc(100vh - 64px);
 }
 
@@ -2818,12 +2838,21 @@ body::after {
 .section-rail {
   position: sticky;
   top: 80px;
+  align-self: start;            /* don't stretch — keep rail tall but anchored */
+  height: calc(100vh - 96px);   /* fill viewport below topbar so it floats nicely */
   display: flex;
   flex-direction: column;
   align-items: stretch;
   padding: 16px 8px;
   gap: 4px;
   z-index: 30;
+  /* Subtle vertical separation when scrolled past the topbar */
+  border-right: 1px solid oklch(100% 0 0 / 0.04);
+  background: linear-gradient(180deg,
+    oklch(8% 0.005 250 / 0.4) 0%,
+    oklch(8% 0.005 250 / 0) 100%);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
 }
 
 .rail-btn {
@@ -3160,32 +3189,92 @@ main.layout-main > .dash-section { display: block; width: 100%; }
   margin-top: 6px;
 }
 
+/* Horizontal scrollable rail of fixed-width preview cards.
+   Equal widths regardless of text length, line-clamped to 4 lines
+   with a fade-out so long ideas don't visually dominate the row. */
 .wishlist-preview {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 8px;
-  margin-top: 8px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border);
-}
-.wishlist-preview-item {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 16px 4px 4px 4px;
+  border-top: 1px solid var(--border);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-behavior: smooth;
+  scroll-snap-type: x proximity;
+  /* Edge-fade mask hints there's more to scroll */
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, black 16px, black calc(100% - 32px), transparent 100%);
+          mask-image: linear-gradient(90deg, transparent 0, black 16px, black calc(100% - 32px), transparent 100%);
+}
+.wishlist-preview::-webkit-scrollbar { height: 6px; }
+.wishlist-preview::-webkit-scrollbar-track { background: transparent; }
+.wishlist-preview::-webkit-scrollbar-thumb {
+  background: oklch(100% 0 0 / 0.06);
+  border-radius: 3px;
+}
+.wishlist-preview::-webkit-scrollbar-thumb:hover { background: oklch(100% 0 0 / 0.12); }
+
+.wishlist-preview-item {
+  flex: 0 0 280px;
+  scroll-snap-align: start;
+  position: relative;
+  display: grid;
+  grid-template-columns: 8px 1fr;
+  gap: 12px;
+  padding: 14px 16px 16px 14px;
+  min-height: 96px;
   background: oklch(16% 0.010 250 / 0.5);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  font-size: 12px;
+  border-radius: 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
   color: var(--text1);
-  transition: all 240ms var(--ease);
+  transition: border-color 240ms var(--ease), transform 240ms var(--ease);
 }
 .wishlist-preview-item .dot {
   width: 6px; height: 6px; border-radius: 50%;
-  flex-shrink: 0;
+  align-self: start;
+  margin-top: 8px;
 }
 .wishlist-preview-item.unused .dot { background: var(--blue); box-shadow: 0 0 8px var(--blue); }
 .wishlist-preview-item.curated .dot { background: var(--purple); box-shadow: 0 0 8px var(--purple); }
+
+/* The text body — clamp to 4 lines with a soft fade gradient at the bottom
+   so a long idea reads "this continues" without taking over the row. */
+.wishlist-preview-item .body {
+  position: relative;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+}
+.wishlist-preview-item .body::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 22px;
+  background: linear-gradient(180deg,
+    transparent 0%,
+    oklch(16% 0.010 250 / 0.95) 90%);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+.wishlist-preview-item.is-clamped .body::after { opacity: 1; }
+
+/* Lead — bolder first sentence/title pulled out of the body so the eye
+   catches the *idea* before the prose. Small typographic trick that
+   makes ideas feel readable without changing card size. */
+.wishlist-preview-item .lead {
+  display: block;
+  color: var(--text0);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  margin-bottom: 4px;
+}
+.wishlist-preview-item.curated .lead {
+  color: oklch(86% 0.06 320);
+}
 .wishlist-overview:hover .wishlist-preview-item {
   border-color: var(--border-strong);
   transform: translateX(2px);

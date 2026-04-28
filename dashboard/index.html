@@ -85,20 +85,26 @@
           </div>
           <div class="grid-row" style="margin-top: 20px">
             <div class="stat-card span-4" id="stat-streak-card" data-tilt>
-              <div class="stat-icon">◆</div>
-              <div class="stat-label">Streak</div>
+              <div class="stat-header">
+                <div class="stat-icon">◆</div>
+                <div class="stat-label">Streak</div>
+              </div>
               <div class="stat-value accent" id="stat-streak">—</div>
               <div class="stat-delta">days in a row</div>
             </div>
             <div class="stat-card span-4" id="stat-shipped-card" data-tilt>
-              <div class="stat-icon">✓</div>
-              <div class="stat-label">Shipped</div>
+              <div class="stat-header">
+                <div class="stat-icon">✓</div>
+                <div class="stat-label">Shipped</div>
+              </div>
               <div class="stat-value" id="stat-completed">—</div>
               <div class="stat-delta">of <span id="stat-projects">0</span> projects</div>
             </div>
             <div class="stat-card span-4" id="stat-commits-card" data-tilt>
-              <div class="stat-icon">⎇</div>
-              <div class="stat-label">Total Commits</div>
+              <div class="stat-header">
+                <div class="stat-icon">⎇</div>
+                <div class="stat-label">Total Commits</div>
+              </div>
               <div class="stat-value" id="stat-commits">—</div>
               <div class="stat-delta"><span id="stat-additions">0</span> lines added</div>
             </div>
@@ -259,7 +265,7 @@
                   <div class="wcount-sub">AI alternates</div>
                 </div>
               </div>
-              <div class="wishlist-preview" id="wishlist-preview"></div>
+              <div class="wishlist-preview" id="wishlist-preview" tabindex="0" role="region" aria-label="Wishlist preview, scrollable"></div>
             </section>
           </div>
         </section>
