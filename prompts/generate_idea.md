@@ -64,19 +64,27 @@ The project must:
 - Be substantively distinct from every project in `project_history.md` —
   different domain, different algorithm, different user, or different angle
 
-## Visual direction (mandatory — read before choosing)
+## Visual direction (mandatory — read before designing anything)
 
-Read `~/daily-builder/prompts/rules/visual_direction.md` in full.
+Read `~/daily-builder/prompts/rules/visual_direction.md` in full before writing
+the `visual_direction` and `visual_mood` fields below.
 
-Then:
-1. Check the `visual_direction` field in the last two entries of `project_history.md`
-2. Pick a direction from the palette in `visual_direction.md` that was NOT used in either of those two projects
-3. The direction must match the project's domain and emotional register — see the "Best for" notes in each entry
-4. **`navy-blue-default` is not a valid choice.** It is not on the list.
+The visual identity must be **derived from the project**, not selected from a list.
+Work through these four questions for the specific project you generated:
 
-Valid choices: `retro-terminal`, `neo-brutalism`, `glassmorphism-depth`,
-`dark-luxury`, `cyberpunk-neon`, `swiss-international`, `bento-editorial`,
-`light-utility`, `retro-futurism`, `phosphor-cli`
+1. Who is the actual user and what tools do they live in daily?
+2. What is the emotional register of the data (urgent/operational, technical/precise,
+   analytical/exploratory, operational/workflow)?
+3. What does this tool need to communicate nonverbally (trust, speed, depth, power)?
+4. What would make a domain expert say "this looks right for this kind of tool"?
+
+The answers determine the palette, density, typography, and animation register.
+The `visual_direction` field in the JSON should be a **one-sentence description**
+of the derived aesthetic (e.g. "dense dark SIEM aesthetic with hard severity colors
+and no decoration — feels like CrowdStrike Falcon"), NOT a slug from a predefined list.
+
+**Always banned:** navy+blue default, aesthetic chosen before answering the four
+questions, style imposed on the project rather than emerging from it.
 
 ## Output format
 
@@ -98,7 +106,7 @@ fences around it. No text after it. Just the raw JSON:
   ],
   "estimated_sessions": 2,
   "why_impressive": "One sentence on why a recruiter would care about this",
-  "visual_direction": "chosen-direction-slug",
-  "visual_mood": "One sentence describing the aesthetic feel and why it fits this project"
+  "visual_direction": "One sentence: derived aesthetic description — users + data + what it communicates",
+  "visual_mood": "One sentence on what a domain expert should feel looking at the finished UI"
 }
 ```

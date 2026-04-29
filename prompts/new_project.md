@@ -261,15 +261,25 @@ This is not optional. Every project with a UI must commit to a specific visual
 direction before implementation starts. The direction shapes every CSS, color,
 and layout decision.
 
-**Step 1 — Pick the direction:**
-- Check `project_history.md` for the `visual_direction` field in the last two entries
-- Pick a direction from the palette that was NOT used in either of those two projects
-- The direction must match the domain and emotional register of this project
-- `navy-blue-default` is explicitly banned — it is not on the list
+**Step 1 — Derive the direction (do not pick from a list):**
 
-Valid directions: `retro-terminal`, `neo-brutalism`, `glassmorphism-depth`,
-`dark-luxury`, `cyberpunk-neon`, `swiss-international`, `bento-editorial`,
-`light-utility`, `retro-futurism`, `phosphor-cli`
+Answer these four questions about this specific project:
+1. Who is the actual user and what tools do they live in every day?
+2. What is the emotional register of the data (urgent/operational, technical/precise,
+   analytical/exploratory, operational/workflow)?
+3. What does this tool need to communicate nonverbally (trust, speed, depth, power)?
+4. What would make a domain expert say "this looks right for this kind of tool"?
+
+The answers determine everything. Write a one-sentence aesthetic description that
+captures what you derived — e.g. "dense operational SIEM aesthetic with hard severity
+colors, zero decoration, built for sustained attention under pressure." That sentence
+is the visual direction. Record it in `project_history.md` as the `visual_direction`
+field so future projects can be genuinely different.
+
+**Always banned regardless of domain:**
+- Navy + blue default (`#0a0e1a` background + `#3b82f6` accent)
+- Any aesthetic chosen before answering the four questions above
+- Style imposed on the project rather than emerging from it
 
 **Step 2 — Specify the full palette:**
 
