@@ -3,9 +3,11 @@
 A project is NOT done until every one of these is true:
 
 - [ ] It runs end-to-end without errors (verified by actually running it)
-- [ ] The UI (if any) looks polished — follows
-      `~/.claude/rules/web/design-quality.md`. Does not look like a
-      default Tailwind or shadcn template.
+- [ ] The UI (if any) uses the visual direction committed to in Step 3h of
+      the spec — NOT the navy-blue default. Read
+      `~/daily-builder/prompts/rules/visual_direction.md` and verify the
+      anti-checklist at the bottom passes. Follows
+      `~/.claude/rules/web/design-quality.md`.
 - [ ] The README explains what it is, why it exists, how to run it, and
       how it works technically
 - [ ] Every core feature is fully implemented — no stubs, no placeholder

@@ -55,7 +55,7 @@ The project must:
 
 - Solve a real problem engineers or security researchers actually face
 - Be technically impressive — real algorithms, real protocols, real architecture
-- Have a visually striking output or interface
+- Have a visually striking output or interface with a DISTINCT visual identity (see visual direction below)
 - Not be simple — no CRUD apps, no basic scrapers, no tutorial projects
 - Be completable in 2–4 Claude Code sessions
 - Be portfolio-worthy — something a recruiter at a top tech company would notice
@@ -63,6 +63,20 @@ The project must:
   (C only when systems-level demands it and Go doesn't fit)
 - Be substantively distinct from every project in `project_history.md` —
   different domain, different algorithm, different user, or different angle
+
+## Visual direction (mandatory — read before choosing)
+
+Read `~/daily-builder/prompts/rules/visual_direction.md` in full.
+
+Then:
+1. Check the `visual_direction` field in the last two entries of `project_history.md`
+2. Pick a direction from the palette in `visual_direction.md` that was NOT used in either of those two projects
+3. The direction must match the project's domain and emotional register — see the "Best for" notes in each entry
+4. **`navy-blue-default` is not a valid choice.** It is not on the list.
+
+Valid choices: `retro-terminal`, `neo-brutalism`, `glassmorphism-depth`,
+`dark-luxury`, `cyberpunk-neon`, `swiss-international`, `bento-editorial`,
+`light-utility`, `retro-futurism`, `phosphor-cli`
 
 ## Output format
 
@@ -83,6 +97,8 @@ fences around it. No text after it. Just the raw JSON:
     "Feature three description"
   ],
   "estimated_sessions": 2,
-  "why_impressive": "One sentence on why a recruiter would care about this"
+  "why_impressive": "One sentence on why a recruiter would care about this",
+  "visual_direction": "chosen-direction-slug",
+  "visual_mood": "One sentence describing the aesthetic feel and why it fits this project"
 }
 ```

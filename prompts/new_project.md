@@ -253,12 +253,52 @@ Write the full README outline including:
 - Technical deep-dive section (this is what impresses engineers)
 - Contributing and license sections
 
-### 3h. Visual and UX requirements
-Describe exactly how the output or interface should look. If it is a CLI tool, 
-describe the output formatting (colors, progress bars, tables, spinners). 
-If it is a web app, describe the layout, color scheme, and key interactions. 
-Aesthetics are not optional — a beautiful project gets starred, a plain one 
-gets ignored.
+### 3h. Visual direction and UX requirements
+
+**Read `~/daily-builder/prompts/rules/visual_direction.md` before writing this section.**
+
+This is not optional. Every project with a UI must commit to a specific visual
+direction before implementation starts. The direction shapes every CSS, color,
+and layout decision.
+
+**Step 1 — Pick the direction:**
+- Check `project_history.md` for the `visual_direction` field in the last two entries
+- Pick a direction from the palette that was NOT used in either of those two projects
+- The direction must match the domain and emotional register of this project
+- `navy-blue-default` is explicitly banned — it is not on the list
+
+Valid directions: `retro-terminal`, `neo-brutalism`, `glassmorphism-depth`,
+`dark-luxury`, `cyberpunk-neon`, `swiss-international`, `bento-editorial`,
+`light-utility`, `retro-futurism`, `phosphor-cli`
+
+**Step 2 — Specify the full palette:**
+
+Write these values explicitly in the spec:
+- `background`: (hex)
+- `surface`: (hex)
+- `surface-elevated`: (hex)
+- `border`: (hex)
+- `text-primary`: (hex)
+- `text-secondary`: (hex)
+- `accent`: (hex)
+- `accent-secondary` (if applicable): (hex)
+- `ui-font`: (typeface name and fallback)
+- `mono-font`: (typeface name and fallback)
+- `visual-mood`: one sentence describing the aesthetic feel
+
+**Step 3 — Describe the UI:**
+- Layout structure (panels, columns, drawers, full-page)
+- Key interactions and their visual feedback
+- Animation style (what moves, how it moves, compositor-only properties)
+- Typography scale and hierarchy
+- Specific component treatments (cards, buttons, badges, inputs)
+
+**Step 4 — Anti-checklist (the UI is NOT done if any of these are true):**
+- It looks like a default Tailwind or shadcn template
+- Every component has the same border-radius, spacing, and shadow
+- The accent color is `#3b82f6` with no deliberate reason
+- There is no depth, layering, or hierarchy — everything is at the same visual weight
+- Hover, focus, and active states are the browser defaults
 
 ---
 
@@ -391,5 +431,9 @@ YYYY-MM-DD — REPO-NAME
 Domain: (which domain from Step 1)
 Description: TAGLINE
 Tech stack: (comma separated)
+Visual direction: (the direction slug chosen in Step 3h — e.g. retro-terminal)
 Status: IN PROGRESS / COMPLETE
 GitHub: https://github.com/USERNAME/REPO-NAME
+
+The `visual_direction` field is mandatory. The idea generator and next project's
+spec writer will read it to enforce variety. Never leave it blank.
