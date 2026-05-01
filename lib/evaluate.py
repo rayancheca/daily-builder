@@ -22,6 +22,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .deep_evaluate import DeepEvaluation
+from .deep_evaluate import deep_evaluate as _deep_evaluate
+from .deep_evaluate import write_improvements_md
 from .paths import Config, PROMPTS_DIR
 from .project_state import get_progress, get_state
 
@@ -83,6 +86,7 @@ class Evaluation:
     llm: LLMResult | None
     needs_finishing_pass: bool
     generated_at: str
+    deep: DeepEvaluation | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -90,6 +94,7 @@ class Evaluation:
             "score": self.score,
             "heuristic": self.heuristic.to_dict(),
             "llm": self.llm.to_dict() if self.llm else None,
+            "deep": self.deep.to_dict() if self.deep else None,
             "needs_finishing_pass": self.needs_finishing_pass,
             "generated_at": self.generated_at,
         }
@@ -510,7 +515,19 @@ def evaluate(
     if use_llm:
         llm = llm_review(project_dir)
 
-    if llm and llm.score is not None:
+    deep: DeepEvaluation | None = None
+    if use_llm:
+        try:
+            deep = _deep_evaluate(project_dir)
+            write_improvements_md(project_dir, deep)
+        except Exception:
+            pass  # deep eval failure is non-fatal
+
+    if deep and llm and llm.score is not None:
+        score = int(round(heuristic.score * 0.2 + deep.composite_score * 0.5 + llm.score * 0.3))
+    elif deep:
+        score = int(round(heuristic.score * 0.3 + deep.composite_score * 0.7))
+    elif llm and llm.score is not None:
         score = int(round((heuristic.score + llm.score) / 2))
     else:
         score = heuristic.score
@@ -522,6 +539,7 @@ def evaluate(
         score=score,
         heuristic=heuristic,
         llm=llm,
+        deep=deep,
         needs_finishing_pass=needs_pass,
         generated_at=datetime.now(tz=timezone.utc).isoformat(),
     )

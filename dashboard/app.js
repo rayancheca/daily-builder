@@ -615,6 +615,7 @@ function renderDrawer(p) {
     <button class="action-btn resume" data-action="resume" data-name="${escapeAttr(p.name)}" title="Open Terminal and resume this project">▶ Resume</button>
     <button class="action-btn polish" data-action="polish" data-name="${escapeAttr(p.name)}" title="Run finishing pass — README, polish, tests">◆ Polish</button>
     <button class="action-btn evaluate" data-action="evaluate" data-name="${escapeAttr(p.name)}" title="Run evaluator now">✓ Evaluate</button>
+    ${p.evaluation?.has_improvements ? `<button class="action-btn improve" data-action="improve" data-name="${escapeAttr(p.name)}" title="Execute improvements.md in a Claude session">⟳ Improve</button>` : ''}
     <button class="action-btn archive" data-action="archive" data-name="${escapeAttr(p.name)}" title="Move to _archive/ (reversible)">⊘ Archive</button>
     ${p.github ? `<a class="icon-btn" href="${p.github}" target="_blank" rel="noopener" title="Open on GitHub">↗</a>` : ''}
     <button class="icon-btn" onclick="closeDrawer()" title="Close (Esc)">✕</button>
@@ -1371,7 +1372,13 @@ async function handleProjectAction(action, name, btn) {
     }
     toast(`${actionLabel(action)} — ${name}`, 'success');
     if (action === 'evaluate' && data.evaluation) {
-      toast(`Score: ${data.evaluation.score}/100`, 'info');
+      const ev = data.evaluation;
+      toast(`Score: ${ev.score}/100`, 'info');
+      if (ev.deep) {
+        toast(`Deep eval: ${ev.deep.composite_score}/100 · improvements.md written`, 'info');
+      }
+      // Force a data reload so the Improve button appears
+      setTimeout(() => load(), 500);
     }
     if (action === 'archive') {
       closeDrawer();
@@ -1388,7 +1395,7 @@ async function handleProjectAction(action, name, btn) {
 }
 
 function actionLabel(action) {
-  return ({ resume: 'Terminal opened', polish: 'Polish session opened', evaluate: 'Evaluated', archive: 'Archived' })[action] || action;
+  return ({ resume: 'Terminal opened', polish: 'Polish session opened', evaluate: 'Evaluated', archive: 'Archived', improve: 'Improve session opened' })[action] || action;
 }
 
 // === Toast helper ===

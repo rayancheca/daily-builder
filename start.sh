@@ -62,6 +62,7 @@ MODE_OVERRIDE=""
 POLISH_TARGET=""
 EVALUATE_TARGET=""
 RESUME_TARGET=""
+IMPROVE_TARGET=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -75,6 +76,10 @@ while [ $# -gt 0 ]; do
             ;;
         --resume)
             RESUME_TARGET="$2"
+            shift 2
+            ;;
+        --improve)
+            IMPROVE_TARGET="$2"
             shift 2
             ;;
         --mode)
@@ -92,6 +97,7 @@ Usage:
   start.sh --resume <repo-name>      resume a specific project
   start.sh --polish <repo-name>      run finishing pass on a project
   start.sh --evaluate <repo-name>    run evaluator on a project
+  start.sh --improve <repo-name>     execute improvements.md in a Claude session
 
 Files:
   Wishlist:   ~/daily-builder/wishlist.md
@@ -176,6 +182,44 @@ result = evaluate(proj)
 print(json.dumps(result.to_dict(), indent=2))
 record_in_history(proj.name, result, HISTORY_FILE)
 PYEOF
+    exit 0
+fi
+
+# ── Improve mode ──────────────────────────────────────
+if [ -n "$IMPROVE_TARGET" ]; then
+    PROJECT_DIR="$PROJECTS_DIR/$IMPROVE_TARGET"
+    if [ ! -d "$PROJECT_DIR" ]; then
+        echo -e "  ${RED}✗${RESET} Project not found: $IMPROVE_TARGET"
+        exit 1
+    fi
+    IMPROVEMENTS_FILE="$PROJECT_DIR/improvements.md"
+    if [ ! -f "$IMPROVEMENTS_FILE" ]; then
+        echo -e "  ${RED}✗${RESET} No improvements.md found. Run Evaluate first."
+        exit 1
+    fi
+    echo -e "  ${MAGENTA}⟳${RESET} Running improvements on ${BOLD}$IMPROVE_TARGET${RESET}..."
+    log "Improve: $IMPROVE_TARGET"
+    cd "$PROJECT_DIR"
+
+    IMPROVE_KICK="Read CLAUDE.md and state.md. Then read improvements.md in this directory carefully. Work through every item from Critical priority down to Low. For each item: implement the fix, verify it works (run tests if applicable), then mark it complete in improvements.md by changing '- [ ]' to '- [x]'. Commit after completing each priority block (Critical, High, Medium, Low). Be thorough — these are real issues identified by a multi-agent code review."
+
+    if command -v pbcopy >/dev/null 2>&1; then
+        printf '%s' "$IMPROVE_KICK" | pbcopy
+        CLIP_NOTE="${GREEN}(copied to clipboard)${RESET}"
+    else
+        CLIP_NOTE=""
+    fi
+
+    echo ""
+    echo -e "  ${CYAN}────────────────────────────────────────${RESET}"
+    echo ""
+    echo -e "  ${BOLD}Paste this as your first message${RESET} $CLIP_NOTE${BOLD}:${RESET}"
+    echo ""
+    echo -e "  ${DIM}${IMPROVE_KICK}${RESET}"
+    echo ""
+    echo -e "  ${CYAN}────────────────────────────────────────${RESET}"
+    echo ""
+    claude --dangerously-skip-permissions --model "$CLAUDE_MODEL"
     exit 0
 fi
 

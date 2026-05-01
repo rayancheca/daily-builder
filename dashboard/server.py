@@ -422,12 +422,17 @@ def _read_evaluation(project_dir):
     try:
         with open(eval_path) as f:
             data = json.load(f)
+        deep = data.get('deep')
         return {
             'score': data.get('score'),
             'heuristic_score': (data.get('heuristic') or {}).get('score'),
             'llm_score': (data.get('llm') or {}).get('score') if data.get('llm') else None,
+            'deep': {
+                'composite_score': (deep or {}).get('composite_score'),
+            } if deep else None,
             'needs_finishing_pass': data.get('needs_finishing_pass', False),
             'generated_at': data.get('generated_at'),
+            'has_improvements': os.path.isfile(os.path.join(project_dir, 'improvements.md')),
         }
     except (OSError, json.JSONDecodeError):
         return None
@@ -1018,6 +1023,25 @@ def _action_polish(name: str):
         return {'ok': False, 'error': str(exc)}
 
 
+def _action_improve(name: str):
+    cmd = f"bash {shlex.quote(START_SCRIPT)} --improve {shlex.quote(name)}"
+    applescript = (
+        f'tell application "Terminal"\n'
+        f'  activate\n'
+        f'  do script "{cmd}"\n'
+        f'end tell'
+    )
+    try:
+        subprocess.Popen(
+            ['osascript', '-e', applescript],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return {'ok': True, 'action': 'improve', 'name': name}
+    except (FileNotFoundError, subprocess.SubprocessError) as exc:
+        return {'ok': False, 'error': str(exc)}
+
+
 def _action_archive(name: str, project_dir: str):
     os.makedirs(ARCHIVE_DIR, exist_ok=True)
     target = os.path.join(ARCHIVE_DIR, name)
@@ -1140,7 +1164,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._json({'ok': True, 'item': item})
             return
 
-        match = re.match(r'^/api/project/([^/]+)/(resume|archive|evaluate|polish)$', p)
+        match = re.match(r'^/api/project/([^/]+)/(resume|archive|evaluate|polish|improve)$', p)
         if match:
             name = match.group(1)
             action = match.group(2)
@@ -1157,6 +1181,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self._json(_action_evaluate(name, project_dir))
             elif action == 'polish':
                 self._json(_action_polish(name))
+            elif action == 'improve':
+                self._json(_action_improve(name))
             return
 
         self.send_response(404)

@@ -1781,6 +1781,8 @@ main > section:nth-child(8), main > div:nth-child(8) { animation-delay: 0.40s; }
 .action-btn.evaluate:hover { background: color-mix(in oklch, var(--cyan), transparent 85%); }
 .action-btn.archive  { color: var(--text2); }
 .action-btn.archive:hover  { background: color-mix(in oklch, var(--red), transparent 88%); color: var(--red); }
+.action-btn.improve  { color: var(--purple); }
+.action-btn.improve:hover  { background: color-mix(in oklch, var(--purple), transparent 85%); }
 
 /* ─── Quota tile ──────────────────────────────────────── */
 #quota-tile .quota-body {
